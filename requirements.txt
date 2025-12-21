@@ -3,3 +3,5 @@
 # MCP (Model Context Protocol) server for AI tool integration
 mcp>=1.0.0
 
+# Testing
+pytest>=7.4.0
