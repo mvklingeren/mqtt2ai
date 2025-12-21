@@ -313,8 +313,8 @@ if __name__ == "__main__":
     print("Simulating message sequence:\n")
     for test_topic, test_payload in test_messages:
         test_result = analyzer.analyze(test_topic, test_payload)
-        status_icon = "🔴 TRIGGER" if test_result.should_trigger else "⚪ no trigger"
-        print(f"{status_icon} | {test_topic}")
+        icon = "🔴 TRIGGER" if test_result.should_trigger else "⚪ no trigger"
+        print(f"{icon} | {test_topic}")
         print(f"         Payload: {test_payload}")
         print(f"         Result: {test_result}")
         print()
