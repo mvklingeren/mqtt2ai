@@ -1,4 +1,4 @@
-# MQTT AI Home Automation Daemon
+# MQTT2AI Home Automation Daemon
 
 A self-learning smart home automation system that uses AI (Gemini) to analyze MQTT messages, detect user behavior patterns, and automatically create automation rules.
 
