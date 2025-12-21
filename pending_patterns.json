@@ -191,6 +191,17 @@
           "timestamp": "2025-12-21T07:39:56.388746"
         }
       ]
+    },
+    {
+      "trigger_topic": "ring/8bca0aef-8bda-441b-9fa9-cbd8e940c142/camera/54e019c6cb9b/motion",
+      "trigger_field": "state",
+      "action_topic": "zigbee2mqtt/0xa4c138dafc9a42aa",
+      "observations": [
+        {
+          "delay_seconds": 16.0,
+          "timestamp": "2025-12-21T10:52:49.599935"
+        }
+      ]
     }
   ]
 }

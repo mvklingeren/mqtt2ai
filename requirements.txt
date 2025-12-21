@@ -1,0 +1,5 @@
+# Core dependencies for MQTT AI Daemon
+
+# MCP (Model Context Protocol) server for AI tool integration
+mcp>=1.0.0
+
