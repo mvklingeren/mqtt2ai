@@ -24,6 +24,16 @@ from mqtt_client import MqttClient
 from ai_agent import AiAgent
 from trigger_analyzer import TriggerAnalyzer
 
+VERSION = "0.2"
+
+BANNER = r"""
+  __  __  ___ _____ _____ ____    _    ___ 
+ |  \/  |/ _ \_   _|_   _|___ \  / \  |_ _|
+ | |\/| | | | || |   | |   __) |/ _ \  | | 
+ | |  | | |_| || |   | |  / __// ___ \ | | 
+ |_|  |_|\__\_\|_|   |_| |_____/_/   \_\___|
+"""
+
 
 @dataclass
 class AiRequest:
@@ -40,6 +50,27 @@ def setup_logging(config: Config):
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="[%H:%M:%S]"
     )
+
+
+def print_banner(config: Config):
+    """Print the MQTT2AI ASCII art banner with version and AI info."""
+    cyan, yellow, reset = "\033[96m", "\033[93m", "\033[0m"
+    dim, bold = "\033[2m", "\033[1m"
+
+    # Get the appropriate model based on provider
+    provider = config.ai_provider
+    if provider == "gemini":
+        model = config.gemini_model
+    elif provider == "claude":
+        model = config.claude_model
+    elif provider == "codex-openai":
+        model = config.codex_model
+    else:
+        model = "unknown"
+
+    print(f"{cyan}{BANNER}{reset}")
+    print(f"  {dim}v{VERSION}{reset}  {bold}AI:{reset} {yellow}{provider}{reset} / {model}")
+    print()
 
 
 def timestamp() -> str:
@@ -77,6 +108,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
     def start(self):
         """Start the daemon."""
         setup_logging(self.config)
+        print_banner(self.config)
 
         # Load initial state
         self.kb.load_all()
