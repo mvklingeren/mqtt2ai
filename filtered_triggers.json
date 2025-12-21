@@ -1,0 +1,14 @@
+{
+  "cooldown_seconds": 5,
+  "baseline_window_seconds": 600,
+  "state_fields": ["contact", "smoke", "occupancy", "water_leak", "tamper", "motion", "state", "action"],
+  "numeric_fields": {
+    "power": { "immediate_delta": 100, "drift_delta": 200 },
+    "temperature": { "immediate_delta": 5, "drift_delta": 10 },
+    "current": { "immediate_delta": 2, "drift_delta": 5 },
+    "humidity": { "immediate_delta": 20, "drift_delta": 30 },
+    "illuminance": { "immediate_delta": 500, "drift_delta": 1000 },
+    "energy": { "immediate_delta": 100, "drift_delta": 500 }
+  }
+}
+

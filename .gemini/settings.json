@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "mqtt-tools": {
+      "command": "python3",
+      "args": [
+        "./mcp_mqtt_server.py"
+      ]
+    }
+  }
+}

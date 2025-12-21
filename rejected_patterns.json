@@ -1,0 +1,12 @@
+{
+  "patterns": [
+    {
+      "trigger_topic": "zigbee2mqtt/0xbc33acfffe870a61",
+      "trigger_field": "occupancy",
+      "action_topic": "zigbee2mqtt/0x90fd9ffffe1a6a0f/set",
+      "reason": "Coincidental - PIR on ground floor, light on first floor. Walking past sensor to go upstairs.",
+      "rejected_at": "2025-12-20T21:00:00.000000"
+    }
+  ]
+}
+

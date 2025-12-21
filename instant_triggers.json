@@ -1,0 +1,7 @@
+{
+  "triggers": [
+    "smoke_detector.*\"smoke\":\\s*true",
+    "front_door.*\"contact\":\\s*false",
+    "window_sensor.*\"contact\":\\s*false"
+  ]
+}
