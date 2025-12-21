@@ -164,25 +164,34 @@ class TestMqttAiDaemonHandleAiCheck:
             daemon._handle_ai_check("test snapshot", "test reason")
             mock_run.assert_not_called()
 
-    def test_handle_ai_check_calls_ai(self, config_with_temp_files):
-        """Test that AI analysis is called in normal mode."""
+    def test_handle_ai_check_queues_request(self, config_with_temp_files):
+        """Test that AI request is queued in normal mode."""
         config_with_temp_files.no_ai = False
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        with patch.object(daemon.kb, "load_all"):
-            with patch.object(daemon.ai, "run_analysis") as mock_run:
-                daemon._handle_ai_check("test snapshot", "test reason")
-                mock_run.assert_called_once()
+        # Ensure queue is empty
+        assert daemon.ai_queue.empty()
 
-    def test_handle_ai_check_reloads_kb(self, config_with_temp_files):
-        """Test that knowledge base is reloaded before AI check."""
+        daemon._handle_ai_check("test snapshot", "test reason")
+
+        # Request should be queued
+        assert not daemon.ai_queue.empty()
+        request = daemon.ai_queue.get_nowait()
+        assert request.snapshot == "test snapshot"
+        assert request.reason == "test reason"
+
+    def test_handle_ai_check_skips_when_busy(self, config_with_temp_files):
+        """Test that requests are skipped when AI is busy."""
         config_with_temp_files.no_ai = False
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        with patch.object(daemon.kb, "load_all") as mock_load:
-            with patch.object(daemon.ai, "run_analysis"):
-                daemon._handle_ai_check("test snapshot", "test reason")
-                mock_load.assert_called_once()
+        # Simulate AI being busy
+        daemon.ai_busy.set()
+
+        daemon._handle_ai_check("test snapshot", "test reason")
+
+        # Queue should remain empty when AI is busy
+        assert daemon.ai_queue.empty()
 
 
 class TestMqttAiDaemonMessageDeque:

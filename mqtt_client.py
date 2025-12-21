@@ -42,8 +42,10 @@ class MqttClient:
             "mosquitto_sub",
             "-h", self.config.mqtt_host,
             "-p", self.config.mqtt_port,
-            "-t", self.config.mqtt_topic,
-            "-v"
         ]
+        # Add each topic with its own -t flag
+        for topic in self.config.mqtt_topics:
+            cmd.extend(["-t", topic])
+        cmd.append("-v")
         logging.info("Starting MQTT listener: %s", ' '.join(cmd))
         return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

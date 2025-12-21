@@ -123,12 +123,12 @@ class TestAiAgentGetCliCommand:
         assert "gpt-4" in args
         assert "--full-auto" in args
 
-    def test_default_provider_is_gemini(self, config):
-        """Test that default provider is gemini."""
+    def test_default_provider_is_codex_openai(self, config):
+        """Test that default provider is codex-openai."""
         agent = AiAgent(config)
         cmd, args = agent._get_cli_command()
 
-        assert "--yolo" in args  # Gemini-specific flag
+        assert "--full-auto" in args  # Codex-specific flag
 
 
 class TestAiAgentBuildPrompt:

@@ -174,18 +174,21 @@ class TestMqttClientStartListenerProcess:
         port_idx = call_args.index("-p") + 1
         assert call_args[port_idx] == "8883"
 
-    def test_start_listener_with_correct_topic(self, mock_subprocess_popen):
-        """Test start_listener_process uses correct topic."""
+    def test_start_listener_with_correct_topics(self, mock_subprocess_popen):
+        """Test start_listener_process uses correct topics."""
         config = Config()
-        config.mqtt_topic = "zigbee2mqtt/#"
+        config.mqtt_topics = ["zigbee2mqtt/#", "jokes/#"]
         client = MqttClient(config)
 
         client.start_listener_process()
 
         call_args = mock_subprocess_popen.call_args[0][0]
-        assert "-t" in call_args
-        topic_idx = call_args.index("-t") + 1
-        assert call_args[topic_idx] == "zigbee2mqtt/#"
+        # Check that both topics are present with -t flags
+        assert call_args.count("-t") == 2
+        first_topic_idx = call_args.index("-t") + 1
+        assert call_args[first_topic_idx] == "zigbee2mqtt/#"
+        second_topic_idx = call_args.index("-t", first_topic_idx) + 1
+        assert call_args[second_topic_idx] == "jokes/#"
 
     def test_start_listener_with_verbose_flag(self, config, mock_subprocess_popen):
         """Test start_listener_process uses -v flag."""
@@ -220,7 +223,7 @@ class TestMqttClientIntegration:
         config = Config()
         config.mqtt_host = "shared.host.com"
         config.mqtt_port = "9999"
-        config.mqtt_topic = "test/#"
+        config.mqtt_topics = ["test/#"]
 
         client = MqttClient(config)
 

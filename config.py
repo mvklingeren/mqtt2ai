@@ -16,10 +16,15 @@ class Config:  # pylint: disable=too-many-instance-attributes
 
     mqtt_host: str = "192.168.1.245"
     mqtt_port: str = "1883"
-    mqtt_topic: str = "#"
-    max_messages: int = 1000
+    mqtt_topics: List[str] = field(
+        default_factory=lambda: [
+            "zigbee2mqtt/#",
+            "jokes/#"
+        ]
+    )
+    max_messages: int = 500  # Keep last 500 messages in buffer
     ai_check_interval: int = 300  # 5 minutes
-    ai_check_threshold: int = 500  # messages
+    ai_check_threshold: int = 200  # Trigger AI after 200 messages
 
     # Files
     rulebook_file: str = "rulebook.md"
@@ -29,7 +34,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
     rejected_patterns_file: str = "rejected_patterns.json"
 
     # AI Provider
-    ai_provider: str = "gemini"  # "gemini", "claude", or "codex-openai"
+    ai_provider: str = "codex-openai"  # "gemini", "claude", or "codex-openai"
 
     # Gemini
     gemini_command: str = "/opt/homebrew/bin/gemini"
@@ -42,10 +47,11 @@ class Config:  # pylint: disable=too-many-instance-attributes
 
     # Codex (OpenAI)
     codex_command: str = "codex"  # Assumes npm global install puts it in PATH
-    codex_model: str = "o4-mini"
+    codex_model: str = "gpt-4.1-mini"
 
     # Filtering & Display
     verbose: bool = False
+    compress_output: bool = False  # Compress MQTT payloads in console output
     demo_mode: bool = False
     no_ai: bool = False  # Run without making AI calls (logging only)
     test_ai: bool = False  # Test AI connection before starting daemon
@@ -57,7 +63,11 @@ class Config:  # pylint: disable=too-many-instance-attributes
             "zigbee2mqtt/bridge/health"
         ]
     )
-    ignore_printing_prefixes: List[str] = field(default_factory=list)
+    ignore_printing_prefixes: List[str] = field(
+        default_factory=lambda: [
+            "stat/",  # Tasmota logging/status messages
+        ]
+    )
 
     @classmethod
     def from_args(cls) -> 'Config':
@@ -81,7 +91,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
         parser.add_argument(
             "--ai-provider",
             choices=["gemini", "claude", "codex-openai"],
-            default=os.environ.get("AI_PROVIDER", "gemini"),
+            default=os.environ.get("AI_PROVIDER", "codex-openai"),
             help="AI provider to use (gemini, claude, or codex-openai)"
         )
 
@@ -123,7 +133,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
         )
         parser.add_argument(
             "--codex-model",
-            default="o4-mini",
+            default="gpt-4.1-mini",
             help="Codex/OpenAI Model ID"
         )
 
@@ -131,6 +141,11 @@ class Config:  # pylint: disable=too-many-instance-attributes
             "--verbose", "-v",
             action="store_true",
             help="Enable verbose logging"
+        )
+        parser.add_argument(
+            "--compress", "-c",
+            action="store_true",
+            help="Compress MQTT payloads in console output (removes noise fields)"
         )
         parser.add_argument(
             "--demo",
@@ -167,6 +182,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
         c.codex_command = args.codex_command
         c.codex_model = args.codex_model
         c.verbose = args.verbose
+        c.compress_output = args.compress
         c.demo_mode = args.demo
         c.no_ai = args.no_ai
         c.test_ai = args.test_ai

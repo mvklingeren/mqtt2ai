@@ -21,6 +21,25 @@ def timestamp() -> str:
 class AiAgent:
     """Handles interaction with AI CLI tools (Gemini, Claude, or Codex)."""
 
+    # Fields to REMOVE from payloads (known noise, not useful for patterns)
+    # Everything else is kept by default
+    REMOVE_FIELDS = {
+        # Zigbee device metadata (noise)
+        "linkquality", "voltage", "energy",
+        "update", "update_available",
+        # Zigbee device settings (rarely change, not triggers)
+        "child_lock", "countdown", "indicator_mode", "power_outage_memory",
+        # Ring camera/device noise
+        "timestamp", "type", "wirelessNetwork", "wirelessSignal",
+        "firmwareStatus", "lastUpdate", "stream_Source", "still_Image_URL",
+        # Version info
+        "installed_version", "latest_version",
+        # Tasmota device noise
+        "Time", "Uptime", "UptimeSec", "Vcc", "Heap",
+        "SleepMode", "Sleep", "LoadAvg", "MqttCount",
+        "Hostname", "IPAddress",
+    }
+
     def __init__(self, config: Config):
         self.config = config
 
@@ -68,14 +87,66 @@ class AiAgent:
             cyan, provider, trigger_reason, reset
         )
 
-        prompt = self._build_prompt(messages_snapshot, kb, trigger_reason)
+        # Compress the snapshot to reduce token usage
+        compressed_snapshot = self._compress_snapshot(messages_snapshot)
+        prompt = self._build_prompt(compressed_snapshot, kb, trigger_reason)
         self._execute_ai_call(provider, prompt)
+
+    def _compress_snapshot(self, messages_snapshot: str) -> str:
+        """Compress MQTT payloads by removing known noise fields.
+
+        Uses a blacklist approach: removes known noise fields, keeps everything else.
+        Also removes nested objects and null values.
+        """
+        compressed_lines = []
+
+        for line in messages_snapshot.split('\n'):
+            if not line.strip():
+                continue
+
+            # Try to find JSON payload in the line
+            # Format is typically: [HH:MM:SS] topic/path {"key": "value", ...}
+            try:
+                # Find the start of JSON payload
+                json_start = line.find('{')
+                if json_start == -1:
+                    # No JSON payload, keep line as-is
+                    compressed_lines.append(line)
+                    continue
+
+                prefix = line[:json_start]
+                json_str = line[json_start:]
+
+                # Parse and filter the JSON
+                payload = json.loads(json_str)
+                if isinstance(payload, dict):
+                    filtered = {
+                        k: v for k, v in payload.items()
+                        if k not in self.REMOVE_FIELDS  # Blacklist approach
+                        and v is not None  # Remove null values
+                        and not isinstance(v, dict)  # Remove nested objects
+                    }
+                    if filtered:
+                        compressed_lines.append(
+                            f"{prefix}{json.dumps(filtered, separators=(',', ':'))}"
+                        )
+                    # Skip lines with no remaining fields
+                else:
+                    # Not a dict, keep as-is
+                    compressed_lines.append(line)
+
+            except json.JSONDecodeError:
+                # Not valid JSON, keep line as-is
+                compressed_lines.append(line)
+
+        return '\n'.join(compressed_lines)
 
     def _build_prompt(self, messages_snapshot: str, kb: KnowledgeBase,
                       trigger_reason: str) -> str:
         """Build the prompt for the AI."""
         demo_instruction = (
-            "**Demo mode is ENABLED.** " if self.config.demo_mode else ""
+            "**Demo mode is ENABLED - you MUST send a unique joke to jokes/ topic (see Rule 4).** "
+            if self.config.demo_mode else ""
         )
 
         # Helper to format sections
@@ -119,6 +190,8 @@ class AiAgent:
         prompt = (
             f"You are a home automation AI with pattern learning. {demo_instruction}"
             f"{safety_reminder}"
+            "You have MCP tools available. Use the send_mqtt_message tool to publish "
+            "MQTT messages - do NOT use shell commands or file operations.\n\n"
             "IMPORTANT: Your PRIMARY task is to detect trigger→action patterns "
             "and call record_pattern_observation. "
             "Look for PIR/motion sensors (occupancy:true) followed by light/switch "
@@ -161,8 +234,8 @@ class AiAgent:
             )
 
             response_text = result.stdout.strip()
-            light_blue, reset_color = "\033[94m", "\033[0m"
-            print(f"{timestamp()} AI Response: {light_blue}{response_text}{reset_color}")
+            cyan, reset = "\033[96m", "\033[0m"
+            logging.info("%sAI Response: %s%s", cyan, response_text, reset)
 
         except subprocess.TimeoutExpired:
             logging.error("%s CLI timed out after 120 seconds", provider)

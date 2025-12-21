@@ -23,15 +23,15 @@ class TestConfigDefaults:
         config = Config()
         assert config.mqtt_port == "1883"
 
-    def test_default_mqtt_topic(self):
-        """Test default MQTT topic value."""
+    def test_default_mqtt_topics(self):
+        """Test default MQTT topics value."""
         config = Config()
-        assert config.mqtt_topic == "#"
+        assert config.mqtt_topics == ["zigbee2mqtt/#", "jokes/#"]
 
     def test_default_max_messages(self):
         """Test default max messages value."""
         config = Config()
-        assert config.max_messages == 1000
+        assert config.max_messages == 500
 
     def test_default_ai_check_interval(self):
         """Test default AI check interval (5 minutes)."""
@@ -39,14 +39,14 @@ class TestConfigDefaults:
         assert config.ai_check_interval == 300
 
     def test_default_ai_check_threshold(self):
-        """Test default AI check threshold (500 messages)."""
+        """Test default AI check threshold (200 messages)."""
         config = Config()
-        assert config.ai_check_threshold == 500
+        assert config.ai_check_threshold == 200
 
     def test_default_ai_provider(self):
-        """Test default AI provider is gemini."""
+        """Test default AI provider is codex-openai."""
         config = Config()
-        assert config.ai_provider == "gemini"
+        assert config.ai_provider == "codex-openai"
 
     def test_default_verbose_is_false(self):
         """Test verbose mode is disabled by default."""
@@ -119,7 +119,7 @@ class TestConfigAIProviders:
     def test_codex_model_default(self):
         """Test default Codex model."""
         config = Config()
-        assert config.codex_model == "o4-mini"
+        assert config.codex_model == "gpt-4o-mini"
 
     def test_claude_mcp_config_default_empty(self):
         """Test Claude MCP config is empty by default."""

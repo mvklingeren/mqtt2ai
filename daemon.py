@@ -4,19 +4,32 @@ This module contains the main MqttAiDaemon class that orchestrates
 the MQTT message collection, trigger analysis, and AI integration.
 """
 import collections
+import json
 import os
+import queue
+import select
+import sys
 import threading
 import time
 import logging
 import signal
+from dataclasses import dataclass
 from datetime import datetime
 from collections import deque as Deque
+from typing import Optional
 
 from config import Config
 from knowledge_base import KnowledgeBase
 from mqtt_client import MqttClient
 from ai_agent import AiAgent
 from trigger_analyzer import TriggerAnalyzer
+
+
+@dataclass
+class AiRequest:
+    """Represents a request for AI analysis."""
+    snapshot: str
+    reason: str
 
 
 def setup_logging(config: Config):
@@ -50,7 +63,16 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
 
         self.ai_event = threading.Event()
         self.running = True
-        self.collector_thread = None
+        self.collector_thread: Optional[threading.Thread] = None
+
+        # AI worker thread and queue for async AI calls
+        self.ai_queue: queue.Queue[Optional[AiRequest]] = queue.Queue()
+        self.ai_thread: Optional[threading.Thread] = None
+        self.ai_busy = threading.Event()  # Set when AI is processing a request
+
+        # Keyboard input thread for manual triggers
+        self.keyboard_thread: Optional[threading.Thread] = None
+        self.manual_trigger = False  # Flag to track if trigger was manual
 
     def start(self):
         """Start the daemon."""
@@ -68,9 +90,22 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             list(stats['config']['numeric_fields'].keys())
         )
 
+        # Start AI worker thread (processes AI requests asynchronously)
+        if not self.config.no_ai:
+            self.ai_thread = threading.Thread(
+                target=self._ai_worker_loop, daemon=True, name="AI-Worker"
+            )
+            self.ai_thread.start()
+
+        # Start keyboard input thread for manual triggers
+        self.keyboard_thread = threading.Thread(
+            target=self._keyboard_input_loop, daemon=True, name="Keyboard-Input"
+        )
+        self.keyboard_thread.start()
+
         # Start collector
         self.collector_thread = threading.Thread(
-            target=self._collector_loop, daemon=True
+            target=self._collector_loop, daemon=True, name="MQTT-Collector"
         )
         self.collector_thread.start()
 
@@ -121,17 +156,50 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         except KeyboardInterrupt:
             logging.info("Stopping daemon (KeyboardInterrupt)...")
         finally:
-            self.running = False
+            self._shutdown()
 
     def _determine_trigger_reason(
         self, instant_trigger: bool, should_check_count: bool
     ) -> str:
         """Determine the reason for triggering an AI check."""
+        if self.manual_trigger:
+            self.manual_trigger = False
+            return "manual (Enter pressed)"
         if instant_trigger:
             return "smart_trigger"
         if should_check_count:
             return f"message_count ({self.config.ai_check_threshold})"
         return f"interval ({self.config.ai_check_interval}s)"
+
+    def _keyboard_input_loop(self):
+        """Background thread that listens for Enter key to trigger manual AI check."""
+        logging.info("Press [Enter] to trigger an immediate AI check")
+
+        while self.running:
+            try:
+                # Use select for non-blocking check with timeout on Unix
+                if sys.platform != 'win32':
+                    ready, _, _ = select.select([sys.stdin], [], [], 1.0)
+                    if ready:
+                        line = sys.stdin.readline()
+                        if line == '\n' or line == '':
+                            self.manual_trigger = True
+                            self.ai_event.set()
+                            logging.info("Manual AI check triggered")
+                else:
+                    # Windows fallback - blocking read
+                    import msvcrt  # pylint: disable=import-outside-toplevel
+                    if msvcrt.kbhit():
+                        key = msvcrt.getch()
+                        if key == b'\r' or key == b'\n':
+                            self.manual_trigger = True
+                            self.ai_event.set()
+                            logging.info("Manual AI check triggered")
+                    else:
+                        time.sleep(0.1)
+            except Exception:  # pylint: disable=broad-exception-caught
+                # Stdin might not be available (e.g., when running as service)
+                time.sleep(1.0)
 
     def _handle_ai_check(self, snapshot: str, reason: str):
         """Handle the AI check based on mode."""
@@ -142,9 +210,65 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 len(snapshot.splitlines())
             )
         else:
-            # Reload knowledge base to get any updates from tools/external edits
-            self.kb.load_all()
-            self.ai.run_analysis(snapshot, self.kb, reason)
+            # Queue the AI request for async processing
+            # Skip if AI is already busy to avoid queue buildup
+            if self.ai_busy.is_set():
+                logging.debug(
+                    "AI is busy, skipping request (reason: %s)", reason
+                )
+                return
+
+            request = AiRequest(snapshot=snapshot, reason=reason)
+            self.ai_queue.put(request)
+            logging.debug("Queued AI request (reason: %s)", reason)
+
+    def _ai_worker_loop(self):
+        """Background thread that processes AI requests from the queue."""
+        logging.info("AI worker thread started")
+
+        while self.running:
+            try:
+                # Wait for a request with timeout to allow checking self.running
+                request = self.ai_queue.get(timeout=1.0)
+
+                # None is the shutdown signal
+                if request is None:
+                    logging.debug("AI worker received shutdown signal")
+                    break
+
+                # Mark as busy to prevent queue buildup
+                self.ai_busy.set()
+
+                try:
+                    # Reload knowledge base to get any updates
+                    self.kb.load_all()
+                    self.ai.run_analysis(request.snapshot, self.kb, request.reason)
+                finally:
+                    self.ai_busy.clear()
+                    self.ai_queue.task_done()
+
+            except queue.Empty:
+                # Timeout, just continue to check self.running
+                continue
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logging.error("AI worker error: %s", e)
+                self.ai_busy.clear()
+
+        logging.info("AI worker thread stopped")
+
+    def _shutdown(self):
+        """Gracefully shutdown the daemon and its threads."""
+        self.running = False
+
+        # Signal the AI worker thread to stop
+        if self.ai_thread and self.ai_thread.is_alive():
+            logging.debug("Signaling AI worker to stop...")
+            self.ai_queue.put(None)  # Shutdown signal
+            self.ai_thread.join(timeout=5.0)
+            if self.ai_thread.is_alive():
+                logging.warning("AI worker thread did not stop in time")
+
+        logging.info("Daemon shutdown complete")
 
     def _collector_loop(self):  # pylint: disable=too-many-branches,too-many-statements
         """Background thread that collects MQTT messages."""
@@ -219,7 +343,12 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
 
                 # Verbose printing for non-trigger lines
                 if should_print and not is_trigger_line and self.config.verbose:
-                    print(f"{timestamp()} {line}")
+                    if self.config.compress_output:
+                        compressed = self._compress_line(line)
+                        if compressed:  # Skip if fully compressed to nothing
+                            print(f"{timestamp()} {compressed}")
+                    else:
+                        print(f"{timestamp()} {line}")
 
                 # 6. Store
                 with self.lock:
@@ -241,10 +370,41 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("Collector thread error: %s", e)
 
+    def _compress_line(self, line: str) -> Optional[str]:
+        """Compress a single MQTT message line by removing noise fields.
+
+        Returns None if the line has no relevant fields after compression.
+        """
+        try:
+            json_start = line.find('{')
+            if json_start == -1:
+                return line  # No JSON, keep as-is
+
+            prefix = line[:json_start]
+            json_str = line[json_start:]
+
+            payload = json.loads(json_str)
+            if isinstance(payload, dict):
+                filtered = {
+                    k: v for k, v in payload.items()
+                    if k not in AiAgent.REMOVE_FIELDS
+                    and v is not None
+                    and not isinstance(v, dict)
+                }
+                if filtered:
+                    return f"{prefix}{json.dumps(filtered, separators=(',', ':'))}"
+                return None  # All fields were noise
+            return line
+        except json.JSONDecodeError:
+            return line
+
     def _print_trigger(self, trigger_result, line: str):
         """Print a formatted trigger notification."""
         yellow, bold, reset = "\033[93m", "\033[1m", "\033[0m"
-        print(f"{timestamp()} {line}")
+        display_line = self._compress_line(line) if self.config.compress_output else line
+        if display_line is None:
+            display_line = line  # Fallback to original if fully compressed
+        print(f"{timestamp()} {display_line}")
         print(
             f"{timestamp()} {bold}{yellow}"
             f">>> SMART TRIGGER: {trigger_result.reason} <<<{reset}"

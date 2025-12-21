@@ -34,7 +34,7 @@ def main():
             green, reset = "\033[92m", "\033[0m"
             print(f"{green}✓ AI connection test PASSED{reset}")
             print(f"AI Response: {message}")
-            logging.info("Test passed, continuing to start daemon...")
+            sys.exit(0)
         else:
             red, reset = "\033[91m", "\033[0m"
             print(f"{red}✗ AI connection test FAILED{reset}")
