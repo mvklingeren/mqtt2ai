@@ -302,18 +302,16 @@ mqtt-fun/
 
 ## Configuration
 
-Key settings in `mqtt_ai_daemon.py`:
+Configuration is managed via command-line arguments or environment variables.
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `MQTT_HOST` | `192.168.1.245` | MQTT broker address |
-| `MQTT_PORT` | `1883` | MQTT broker port |
-| `MQTT_TOPIC` | `#` | Topics to subscribe to |
-| `MAX_MESSAGES` | `1000` | Message buffer size |
-| `AI_CHECK_INTERVAL_SECONDS` | `300` | Periodic AI check interval |
-| `AI_CHECK_MESSAGE_THRESHOLD` | `50` | Messages before AI check |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | AI model to use |
-| `DEMO_MODE` | `False` | Enable demo mode (always publishes jokes) |
+| Argument | Env Variable | Default | Description |
+|----------|--------------|---------|-------------|
+| `--mqtt-host` | `MQTT_HOST` | `192.168.1.245` | MQTT broker address |
+| `--mqtt-port` | `MQTT_PORT` | `1883` | MQTT broker port |
+| `--gemini-command` | `GEMINI_CLI_COMMAND` | `/opt/homebrew/bin/gemini` | Path to Gemini CLI |
+| `--model` | - | `gemini-2.5-flash` | AI model to use |
+| `--verbose`, `-v` | - | `False` | Enable verbose logging |
+| `--demo` | - | `False` | Enable demo mode |
 
 ---
 
@@ -361,11 +359,17 @@ The MCP server must be configured in your Gemini CLI settings. Add to your MCP c
 ### Run the Daemon
 
 ```bash
-# Normal mode
-python mqtt_ai_daemon.py
+# Normal mode (uses defaults)
+python3 mqtt_ai_daemon.py
 
 # Verbose mode (print all messages)
-python mqtt_ai_daemon.py --verbose
+python3 mqtt_ai_daemon.py --verbose
+
+# Custom MQTT host and model
+python3 mqtt_ai_daemon.py --mqtt-host 192.168.1.50 --model gemini-2.0-flash
+
+# Show all options
+python3 mqtt_ai_daemon.py --help
 ```
 
 ### Test with Simulated Devices
