@@ -13,6 +13,16 @@ A self-learning smart home automation system that uses AI to analyze MQTT messag
 
 ---
 
+## ⚠️ Security Warning
+
+> **This system runs AI agents in UNSAFE/AUTO-APPROVE mode with no human confirmation required.**
+
+### Security Concerns
+
+1. **No Input Validation**: MQTT messages from external sources are passed directly to the AI agent. Malicious actors with access to your MQTT broker might be able to craft messages that manipulate the AI into executing unintended actions. We're working on this.
+
+---
+
 ## Architecture
 
 ```mermaid
@@ -390,7 +400,7 @@ Gemini looks for MCP servers in `~/.gemini/settings.json`. Add the mqtt-tools se
 {
   "mcpServers": {
     "mqtt-tools": {
-      "command": "python",
+      "command": "python3",
       "args": ["/path/to/mqtt2ai/mcp_mqtt_server.py"],
       "cwd": "/path/to/mqtt2ai"
     }
@@ -408,7 +418,7 @@ Claude uses a JSON config file. Create `~/.config/claude/mcp.json`:
 {
   "mcpServers": {
     "mqtt-tools": {
-      "command": "python",
+      "command": "python3",
       "args": ["/path/to/mqtt2ai/mcp_mqtt_server.py"]
     }
   }
@@ -427,7 +437,7 @@ Codex uses a TOML config file at `~/.codex/config.toml`. Add:
 
 ```toml
 [mcp_servers.mqtt-tools]
-command = "python"
+command = "python3"
 args = ["/path/to/mqtt2ai/mcp_mqtt_server.py"]
 ```
 

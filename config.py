@@ -41,6 +41,7 @@ class Config:
     demo_mode: bool = False
     no_ai: bool = False  # Run without making AI calls (logging only)
     test_ai: bool = False  # Test AI connection before starting daemon
+    disable_new_rules: bool = False  # If True, new rules are disabled by default
     skip_printing_seconds: int = 3
     ignore_printing_topics: List[str] = field(default_factory=lambda: ["zigbee2mqtt/bridge/logging", "zigbee2mqtt/bridge/health"])
     ignore_printing_prefixes: List[str] = field(default_factory=list)
@@ -72,6 +73,7 @@ class Config:
         parser.add_argument("--demo", action="store_true", help="Enable demo mode")
         parser.add_argument("--no-ai", action="store_true", help="Disable AI calls (logging only mode)")
         parser.add_argument("--test-ai", action="store_true", help="Test AI connection before starting daemon")
+        parser.add_argument("--disable-new-rules", action="store_true", help="New rules are disabled by default")
         
         args = parser.parse_args()
         
@@ -90,5 +92,6 @@ class Config:
         c.demo_mode = args.demo
         c.no_ai = args.no_ai
         c.test_ai = args.test_ai
+        c.disable_new_rules = args.disable_new_rules
         return c
 

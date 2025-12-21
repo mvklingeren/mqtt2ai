@@ -12,6 +12,8 @@ import subprocess
 from datetime import datetime
 from mcp.server.fastmcp import FastMCP
 
+from config import Config
+
 # MQTT Configuration
 MQTT_HOST = "192.168.1.245"
 MQTT_PORT = "1883"
@@ -23,6 +25,9 @@ REJECTED_PATTERNS_FILE = "rejected_patterns.json"
 
 # Initialize MCP server
 mcp = FastMCP("mqtt-tools")
+
+# Load config
+config = Config()
 
 
 def _load_json_file(filepath: str, default: dict) -> dict:
@@ -140,7 +145,7 @@ def create_rule(
             "occurrences": 3,
             "last_triggered": datetime.now().isoformat()
         },
-        "enabled": True
+        "enabled": not config.disable_new_rules
     }
     
     # Check if this pattern has been rejected

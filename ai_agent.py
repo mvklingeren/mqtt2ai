@@ -1,4 +1,5 @@
 import subprocess
+import shutil
 import os
 import json
 import logging
@@ -35,6 +36,7 @@ class AiAgent:
             cmd = self.config.codex_command
             args = [
                 cmd,
+                "exec",
                 "--model", self.config.codex_model,
                 "--full-auto",  # Auto-approve mode
             ]
@@ -110,7 +112,7 @@ class AiAgent:
         try:
             cli_cmd, cli_args = self._get_cli_command()
             
-            if not os.access(cli_cmd, os.X_OK):
+            if not shutil.which(cli_cmd):
                 logging.error(f"Error: {provider} CLI not found or not executable at '{cli_cmd}'")
                 return
 
@@ -147,7 +149,7 @@ class AiAgent:
         cli_cmd, cli_args = self._get_cli_command()
         
         # Check if CLI executable exists
-        if not os.access(cli_cmd, os.X_OK):
+        if not shutil.which(cli_cmd):
             return False, f"{provider} CLI not found or not executable at '{cli_cmd}'"
         
         test_prompt = (
