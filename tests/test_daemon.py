@@ -327,9 +327,9 @@ class TestMqttAiDaemonThreadSafety:
         """Test that the lock is functional."""
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        acquired = daemon.lock.acquire(blocking=False)
-        assert acquired is True
-        daemon.lock.release()
+        with daemon.lock:
+            # If we got here, the lock was acquired successfully
+            assert True
 
     def test_concurrent_deque_access(self, config_with_temp_files):
         """Test concurrent access to message deque."""

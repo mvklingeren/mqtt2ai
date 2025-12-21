@@ -212,7 +212,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 ready, _, _ = select.select([sys.stdin], [], [], 1.0)
                 if ready:
                     line = sys.stdin.readline()
-                    if line == '\n' or line == '':
+                    if line in ('\n', ''):
                         self.manual_trigger = True
                         self.ai_event.set()
                         logging.info("Manual AI check triggered")
