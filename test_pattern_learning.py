@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pattern Learning Test Script
+Pattern Learning Test Script.
 
 Simulates trigger→action patterns for the AI daemon to learn.
 This script creates clear patterns: PIR motion → light turns on.
@@ -12,11 +12,12 @@ The key to successful pattern learning:
 4. Repeat 3+ times for the AI to recognize the pattern
 """
 
+import argparse
 import json
-import subprocess
-import sys
 import time
 from datetime import datetime
+
+from utils import publish_mqtt
 
 # MQTT Configuration
 MQTT_HOST = "192.168.1.245"
@@ -27,30 +28,18 @@ PIR_TOPIC = "zigbee2mqtt/test_pir"
 LIGHT_TOPIC = "zigbee2mqtt/test_light/set"
 
 
-def timestamp():
+def get_timestamp():
+    """Return current timestamp string."""
     return datetime.now().strftime("[%H:%M:%S]")
 
 
 def send_mqtt(topic: str, payload: dict) -> bool:
     """Send an MQTT message and return success status."""
-    payload_str = json.dumps(payload)
-    try:
-        result = subprocess.run(
-            ["mosquitto_pub", "-h", MQTT_HOST, "-p", MQTT_PORT, "-t", topic, "-m", payload_str],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return True
-    except FileNotFoundError:
-        print("❌ Error: 'mosquitto_pub' not found. Install with: brew install mosquitto")
-        return False
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Error sending MQTT: {e.stderr}")
-        return False
+    return publish_mqtt(topic, payload, MQTT_HOST, MQTT_PORT)
 
 
 def print_header(text):
+    """Print a formatted header."""
     cyan = "\033[96m"
     bold = "\033[1m"
     reset = "\033[0m"
@@ -60,9 +49,10 @@ def print_header(text):
 
 
 def print_event(description, topic, payload):
+    """Print a formatted event."""
     green = "\033[92m"
     reset = "\033[0m"
-    print(f"{timestamp()} {green}→ {description}{reset}")
+    print(f"{get_timestamp()} {green}→ {description}{reset}")
     print(f"           Topic: {topic}")
     print(f"           Payload: {json.dumps(payload)}")
 
@@ -70,42 +60,42 @@ def print_event(description, topic, payload):
 def run_pattern_test(num_repetitions=4, action_delay=3.0, between_delay=8.0):
     """
     Run the pattern learning test.
-    
+
     Args:
-        num_repetitions: How many times to repeat the pattern (3+ needed for rule creation)
-        action_delay: Seconds between PIR trigger and light action (simulates human reaction)
+        num_repetitions: How many times to repeat (3+ needed for rule creation)
+        action_delay: Seconds between PIR trigger and light action
         between_delay: Seconds between pattern repetitions
     """
     yellow = "\033[93m"
     magenta = "\033[95m"
     green = "\033[92m"
     reset = "\033[0m"
-    
+
     print_header("Pattern Learning Test")
-    print(f"This test simulates: PIR motion → Light turns ON")
+    print("This test simulates: PIR motion → Light turns ON")
     print(f"Repetitions: {num_repetitions}x (need 3+ for rule creation)")
     print(f"Action delay: {action_delay}s (time between motion and light)")
     print(f"Between delay: {between_delay}s (time between repetitions)")
-    
+
     # =========================================================================
     # STEP 1: Initialize state (set PIR to false first)
     # =========================================================================
     print(f"\n{magenta}--- Phase 1: Initialize PIR state ---{reset}")
-    print(f"{timestamp()} Setting PIR to occupancy=false (baseline state)")
-    
+    print(f"{get_timestamp()} Setting PIR to occupancy=false (baseline state)")
+
     send_mqtt(PIR_TOPIC, {"occupancy": False})
-    
-    print(f"{timestamp()} Waiting 6s for cooldown to expire...")
+
+    print(f"{get_timestamp()} Waiting 6s for cooldown to expire...")
     time.sleep(6)
-    
+
     # =========================================================================
     # STEP 2: Run the pattern multiple times
     # =========================================================================
     print(f"\n{magenta}--- Phase 2: Run trigger→action patterns ---{reset}")
-    
+
     for rep in range(1, num_repetitions + 1):
         print(f"\n{yellow}━━━ Pattern #{rep}/{num_repetitions} ━━━{reset}")
-        
+
         # 2a. PIR detects motion (trigger)
         print_event(
             "PIR sensor detects motion (TRIGGER)",
@@ -113,11 +103,11 @@ def run_pattern_test(num_repetitions=4, action_delay=3.0, between_delay=8.0):
             {"occupancy": True}
         )
         send_mqtt(PIR_TOPIC, {"occupancy": True})
-        
+
         # 2b. Wait (simulates human reaction time)
-        print(f"{timestamp()} Waiting {action_delay}s (simulating human reaction)...")
+        print(f"{get_timestamp()} Waiting {action_delay}s (simulating human reaction)...")
         time.sleep(action_delay)
-        
+
         # 2c. Light turns on (action)
         print_event(
             "Light turns ON (ACTION)",
@@ -125,7 +115,7 @@ def run_pattern_test(num_repetitions=4, action_delay=3.0, between_delay=8.0):
             {"state": "ON"}
         )
         send_mqtt(LIGHT_TOPIC, {"state": "ON"})
-        
+
         # 2d. Clear the PIR (so next trigger is a change)
         time.sleep(1)
         print_event(
@@ -134,26 +124,25 @@ def run_pattern_test(num_repetitions=4, action_delay=3.0, between_delay=8.0):
             {"occupancy": False}
         )
         send_mqtt(PIR_TOPIC, {"occupancy": False})
-        
+
         # Wait between repetitions (but not after the last one)
         if rep < num_repetitions:
-            print(f"\n{timestamp()} Waiting {between_delay}s before next pattern...")
+            print(f"\n{get_timestamp()} Waiting {between_delay}s before next pattern...")
             time.sleep(between_delay)
-    
+
     # =========================================================================
     # STEP 3: Done
     # =========================================================================
     print_header("Test Complete!")
     print(f"{green}✓ Sent {num_repetitions} trigger→action patterns{reset}")
     print(f"\n{yellow}Check if a rule was learned:{reset}")
-    print(f"  cat learned_rules.json")
-    print(f"  cat pending_patterns.json")
+    print("  cat learned_rules.json")
+    print("  cat pending_patterns.json")
     print()
 
 
 def main():
-    import argparse
-    
+    """Main entry point for the test script."""
     parser = argparse.ArgumentParser(
         description="Test pattern learning for MQTT AI daemon",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -187,9 +176,9 @@ Examples:
         action="store_true",
         help="Quick test mode: 3 repetitions, 2s delays"
     )
-    
+
     args = parser.parse_args()
-    
+
     if args.quick:
         run_pattern_test(num_repetitions=3, action_delay=2.0, between_delay=6.0)
     else:
@@ -202,4 +191,3 @@ Examples:
 
 if __name__ == "__main__":
     main()
-

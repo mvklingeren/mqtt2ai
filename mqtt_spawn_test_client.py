@@ -16,11 +16,12 @@ Usage:
 import argparse
 import json
 import random
-import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from typing import Optional
+from datetime import datetime
+
+from utils import publish_mqtt
 
 # MQTT Configuration (match daemon settings)
 MQTT_HOST = "192.168.1.245"
@@ -48,26 +49,11 @@ class TestScenario:
 
 def send_mqtt(topic: str, payload: dict) -> bool:
     """Send an MQTT message."""
-    payload_str = json.dumps(payload)
-    try:
-        subprocess.run(
-            ["mosquitto_pub", "-h", MQTT_HOST, "-p", MQTT_PORT, "-t", topic, "-m", payload_str],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return True
-    except FileNotFoundError:
-        print("Error: 'mosquitto_pub' not found. Install mosquitto-clients.", file=sys.stderr)
-        return False
-    except subprocess.CalledProcessError as e:
-        print(f"Error sending MQTT: {e.stderr}", file=sys.stderr)
-        return False
+    return publish_mqtt(topic, payload, MQTT_HOST, MQTT_PORT)
 
 
 def timestamp():
     """Return current timestamp."""
-    from datetime import datetime
     return datetime.now().strftime("[%H:%M:%S]")
 
 
@@ -78,7 +64,7 @@ def timestamp():
 SCENARIOS = {
     "pir_light": TestScenario(
         name="PIR → Light",
-        description="PIR sensor detects motion, then user turns on kitchen light (varying delays)",
+        description="PIR sensor detects motion, then user turns on kitchen light",
         events=[
             TestEvent(
                 topic="zigbee2mqtt/pir_hallway",
@@ -101,7 +87,7 @@ SCENARIOS = {
         repeat_count=3,
         repeat_delay=5.0,
     ),
-    
+
     "door_light": TestScenario(
         name="Door → Hallway Light",
         description="Front door opens, user turns on hallway light",
@@ -127,7 +113,7 @@ SCENARIOS = {
         repeat_count=3,
         repeat_delay=10.0,
     ),
-    
+
     "motion_fan": TestScenario(
         name="Motion → Fan",
         description="Motion in bathroom triggers user to turn on exhaust fan",
@@ -147,7 +133,7 @@ SCENARIOS = {
         repeat_count=3,
         repeat_delay=15.0,
     ),
-    
+
     "quick_test": TestScenario(
         name="Quick Test",
         description="Fast scenario for quick testing (short delays)",
@@ -176,26 +162,30 @@ SCENARIOS = {
 }
 
 
-def run_scenario(scenario: TestScenario, user_delay_range: tuple[float, float] = (3.0, 8.0)):
+def run_scenario(
+    scenario: TestScenario,
+    user_delay_range: tuple[float, float] = (3.0, 8.0)
+):
     """
     Run a test scenario multiple times to trigger rule learning.
-    
+
     Args:
         scenario: The scenario to run
         user_delay_range: (min, max) seconds for randomized user action delay
     """
-    cyan, yellow, green, magenta, reset = "\033[96m", "\033[93m", "\033[92m", "\033[95m", "\033[0m"
+    cyan, yellow, green, magenta, reset = (
+        "\033[96m", "\033[93m", "\033[92m", "\033[95m", "\033[0m"
+    )
     bold = "\033[1m"
-    
+
     print(f"\n{bold}{cyan}{'='*60}{reset}")
     print(f"{bold}{cyan}Running Scenario: {scenario.name}{reset}")
     print(f"{cyan}{scenario.description}{reset}")
     print(f"{cyan}Repeating {scenario.repeat_count}x to trigger rule creation{reset}")
     print(f"{cyan}{'='*60}{reset}\n")
-    
+
     # INITIALIZATION PHASE: Prime the daemon with initial states
-    # This ensures the first "real" event will be seen as a CHANGE
-    print(f"{magenta}--- Initialization Phase: Priming daemon with baseline states ---{reset}")
+    print(f"{magenta}--- Initialization Phase: Priming daemon with baseline ---{reset}")
     for event in scenario.events:
         # Send the "opposite" state to prime the analyzer
         primed_payload = event.payload.copy()
@@ -204,23 +194,28 @@ def run_scenario(scenario: TestScenario, user_delay_range: tuple[float, float] =
         elif "contact" in primed_payload:
             primed_payload["contact"] = not primed_payload["contact"]
         elif "state" in primed_payload:
-            primed_payload["state"] = "OFF" if primed_payload["state"] == "ON" else "ON"
+            primed_payload["state"] = (
+                "OFF" if primed_payload["state"] == "ON" else "ON"
+            )
         else:
             continue  # No state field to prime
-        
+
         print(f"{timestamp()} {magenta}Priming: {event.topic} with opposite state{reset}")
         send_mqtt(event.topic, primed_payload)
         time.sleep(0.5)
-    
+
     print(f"{timestamp()} Waiting 2s for daemon to process initial states...\n")
     time.sleep(2.0)
-    
+
     for rep in range(scenario.repeat_count):
         # Randomize the user action delay for realism
         user_delay = random.uniform(*user_delay_range)
-        
-        print(f"{yellow}--- Repetition {rep + 1}/{scenario.repeat_count} (user delay: {user_delay:.1f}s) ---{reset}")
-        
+
+        print(
+            f"{yellow}--- Repetition {rep + 1}/{scenario.repeat_count} "
+            f"(user delay: {user_delay:.1f}s) ---{reset}"
+        )
+
         for i, event in enumerate(scenario.events):
             # Determine delay
             if i == 1 and event.delay_before == 0:
@@ -228,25 +223,28 @@ def run_scenario(scenario: TestScenario, user_delay_range: tuple[float, float] =
                 delay = user_delay
             else:
                 delay = event.delay_before
-            
+
             if delay > 0:
                 print(f"{timestamp()} Waiting {delay:.1f}s...")
                 time.sleep(delay)
-            
+
             # Send the event
             print(f"{timestamp()} {green}→ {event.description}{reset}")
             print(f"           Topic: {event.topic}")
             print(f"           Payload: {json.dumps(event.payload)}")
-            
+
             if not send_mqtt(event.topic, event.payload):
-                print(f"Failed to send event. Aborting scenario.", file=sys.stderr)
+                print("Failed to send event. Aborting scenario.", file=sys.stderr)
                 return False
-        
+
         # Wait between repetitions
         if rep < scenario.repeat_count - 1:
-            print(f"\n{timestamp()} Waiting {scenario.repeat_delay}s before next repetition...\n")
+            print(
+                f"\n{timestamp()} Waiting {scenario.repeat_delay}s "
+                "before next repetition...\n"
+            )
             time.sleep(scenario.repeat_delay)
-    
+
     print(f"\n{bold}{green}✓ Scenario complete! Check if a rule was created.{reset}")
     print(f"{green}  Run: cat learned_rules.json{reset}\n")
     return True
@@ -255,27 +253,27 @@ def run_scenario(scenario: TestScenario, user_delay_range: tuple[float, float] =
 def interactive_mode():
     """Interactive mode for sending custom events."""
     cyan, green, reset = "\033[96m", "\033[92m", "\033[0m"
-    
+
     print(f"\n{cyan}=== Interactive MQTT Test Mode ==={reset}")
     print("Send custom MQTT messages. Type 'quit' to exit.\n")
-    
+
     while True:
         try:
             topic = input("Topic (or 'quit'): ").strip()
             if topic.lower() == 'quit':
                 break
-            
+
             payload_str = input("Payload (JSON): ").strip()
             try:
                 payload = json.loads(payload_str)
             except json.JSONDecodeError:
                 print("Invalid JSON. Try again.")
                 continue
-            
+
             print(f"{green}Sending...{reset}")
             if send_mqtt(topic, payload):
                 print(f"{green}✓ Sent successfully{reset}\n")
-            
+
         except KeyboardInterrupt:
             print("\nExiting.")
             break
@@ -287,7 +285,7 @@ def list_scenarios():
     """List all available test scenarios."""
     cyan, reset = "\033[96m", "\033[0m"
     bold = "\033[1m"
-    
+
     print(f"\n{bold}{cyan}Available Test Scenarios:{reset}\n")
     for key, scenario in SCENARIOS.items():
         print(f"  {bold}{key}{reset}")
@@ -297,16 +295,17 @@ def list_scenarios():
 
 
 def main():
+    """Main entry point for the test client."""
     parser = argparse.ArgumentParser(
-        description="MQTT Test Client - Simulate events for rule learning verification",
+        description="MQTT Test Client - Simulate events for rule learning",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python mqtt_spawn_test_client.py                     # Run default PIR->Light scenario
+  python mqtt_spawn_test_client.py                     # Run default PIR->Light
   python mqtt_spawn_test_client.py --scenario door_light
   python mqtt_spawn_test_client.py --list              # List all scenarios
   python mqtt_spawn_test_client.py --custom            # Interactive mode
-  python mqtt_spawn_test_client.py --min-delay 2 --max-delay 6  # Custom delay range
+  python mqtt_spawn_test_client.py --min-delay 2 --max-delay 6
         """
     )
     parser.add_argument(
@@ -343,27 +342,26 @@ Examples:
         default=None,
         help="Override repeat count (default: use scenario's count)"
     )
-    
+
     args = parser.parse_args()
-    
+
     if args.list:
         list_scenarios()
         return
-    
+
     if args.custom:
         interactive_mode()
         return
-    
+
     # Run the selected scenario
     scenario = SCENARIOS[args.scenario]
-    
+
     # Allow overriding repeat count
     if args.repeat:
         scenario.repeat_count = args.repeat
-    
+
     run_scenario(scenario, user_delay_range=(args.min_delay, args.max_delay))
 
 
 if __name__ == "__main__":
     main()
-
