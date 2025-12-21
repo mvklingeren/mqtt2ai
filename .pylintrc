@@ -1,0 +1,5 @@
+[MESSAGES CONTROL]
+# Disable duplicate-code for the entire project as test files commonly have
+# similar patterns for setup and imports
+disable=duplicate-code
+

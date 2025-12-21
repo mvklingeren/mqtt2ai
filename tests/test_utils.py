@@ -1,14 +1,14 @@
 """Tests for the utils module."""
 import json
 import os
+import subprocess
 import sys
-from unittest.mock import patch, MagicMock
 
-import pytest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils import load_json_file, save_json_file, publish_mqtt
+from utils import load_json_file, save_json_file, publish_mqtt  # pylint: disable=wrong-import-position
 
 
 class TestLoadJsonFile:
@@ -232,8 +232,6 @@ class TestPublishMqtt:
 
     def test_publish_mqtt_file_not_found(self):
         """Test MQTT publish when mosquitto_pub is not found."""
-        import subprocess
-
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = FileNotFoundError()
             result = publish_mqtt("test/topic", {"state": "ON"})
@@ -242,8 +240,6 @@ class TestPublishMqtt:
 
     def test_publish_mqtt_subprocess_error(self):
         """Test MQTT publish when subprocess fails."""
-        import subprocess
-
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(1, "mosquitto_pub")
             mock_run.side_effect.stderr = "Connection refused"
@@ -258,4 +254,3 @@ class TestPublishMqtt:
         call_args = mock_subprocess_run.call_args[0][0]
         assert "192.168.1.245" in call_args
         assert "1883" in call_args
-
