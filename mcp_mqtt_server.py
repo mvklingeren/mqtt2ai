@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MCP Server exposing MQTT tools for Gemini CLI.
+MCP Server exposing MQTT tools for AI CLI agents (Gemini, Claude, Codex).
 This server provides the send_mqtt_message tool that allows the AI
 to publish messages directly to MQTT topics, as well as tools for
 managing learned automation rules.

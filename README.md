@@ -1,10 +1,10 @@
 # MQTT2AI Home Automation Daemon
 
-A self-learning smart home automation system that uses AI (Gemini) to analyze MQTT messages, detect user behavior patterns, and automatically create automation rules.
+A self-learning smart home automation system that uses AI to analyze MQTT messages, detect user behavior patterns, and automatically create automation rules.
 
 ## Features
 
-- 🤖 **AI-Powered Analysis** - Uses Gemini CLI to understand MQTT events
+- 🤖 **AI-Powered Analysis** - Supports multiple AI providers (Gemini, Claude, Codex/OpenAI)
 - 📚 **Pattern Learning** - Watches user behavior and learns automation rules
 - ⚡ **Smart Triggers** - Filters noise and only triggers AI on significant events
 - 🔧 **MCP Tool Calling** - AI can directly publish MQTT messages and manage rules
@@ -34,9 +34,9 @@ flowchart TB
         T3["🎯 Smart: State change"]
     end
 
-    subgraph GeminiAI["Gemini CLI"]
+    subgraph AI["AI CLI (Gemini/Claude/Codex)"]
         Prompt["Prompt with:<br/>- Rulebook<br/>- Learned Rules<br/>- Pending Patterns<br/>- MQTT Messages"]
-        MCPClient["MCP Client<br/>(--yolo mode)"]
+        MCPClient["MCP Client<br/>(auto-approve mode)"]
     end
 
     subgraph MCPServer["mcp_mqtt_server.py"]
@@ -119,7 +119,7 @@ When triggered, the daemon builds a prompt containing:
 - **Pending patterns** (observations not yet rules from `pending_patterns.json`)
 - **Recent MQTT messages** (with timestamps)
 
-The AI is invoked via Gemini CLI with MCP tool calling enabled (`--yolo` mode for auto-approval).
+The AI is invoked via the configured CLI (Gemini, Claude, or Codex) with MCP tool calling enabled and auto-approval mode.
 
 ### 4. MCP Tools
 
@@ -150,7 +150,7 @@ sequenceDiagram
     participant Sensor as PIR Sensor
     participant MQTT
     participant Daemon
-    participant AI as Gemini AI
+    participant AI as AI Agent
     participant MCP as MCP Server
     participant Rules as learned_rules.json
     participant Patterns as pending_patterns.json
@@ -196,7 +196,7 @@ When the AI executes a learned rule, the action appears in the MQTT message buff
 
 ```mermaid
 sequenceDiagram
-    participant AI as Gemini AI
+    participant AI as AI Agent
     participant MCP as MCP Server
     participant MQTT
     participant User
@@ -304,14 +304,46 @@ mqtt-fun/
 
 Configuration is managed via command-line arguments or environment variables.
 
+### General Options
+
 | Argument | Env Variable | Default | Description |
 |----------|--------------|---------|-------------|
 | `--mqtt-host` | `MQTT_HOST` | `192.168.1.245` | MQTT broker address |
 | `--mqtt-port` | `MQTT_PORT` | `1883` | MQTT broker port |
-| `--gemini-command` | `GEMINI_CLI_COMMAND` | `/opt/homebrew/bin/gemini` | Path to Gemini CLI |
-| `--model` | - | `gemini-2.5-flash` | AI model to use |
+| `--ai-provider` | `AI_PROVIDER` | `gemini` | AI provider: `gemini`, `claude`, or `codex-openai` |
 | `--verbose`, `-v` | - | `False` | Enable verbose logging |
 | `--demo` | - | `False` | Enable demo mode |
+| `--no-ai` | - | `False` | Disable AI calls (logging only mode) |
+
+### Gemini Options
+
+| Argument           | Env Variable         | Default                    | Description         |
+| ------------------ | -------------------- | -------------------------- | ------------------- |
+| `--gemini-command` | `GEMINI_CLI_COMMAND` | `/opt/homebrew/bin/gemini` | Path to Gemini CLI  |
+| `--gemini-model`   | -                    | `gemini-2.5-flash`         | Gemini model to use |
+
+### Claude Options
+
+| Argument              | Env Variable         | Default                   | Description                  |
+| --------------------- | -------------------- | ------------------------- | ---------------------------- |
+| `--claude-command`    | `CLAUDE_CLI_COMMAND` | `~/.nvm/.../bin/claude`   | Path to Claude CLI           |
+| `--claude-model`      | -                    | `claude-3-5-haiku-latest` | Claude model to use          |
+| `--claude-mcp-config` | `CLAUDE_MCP_CONFIG`  | -                         | Path to MCP config JSON file |
+
+### Codex/OpenAI Options
+
+| Argument          | Env Variable        | Default   | Description               |
+| ----------------- | ------------------- | --------- | ------------------------- |
+| `--codex-command` | `CODEX_CLI_COMMAND` | `codex`   | Path to Codex CLI         |
+| `--codex-model`   | -                   | `o4-mini` | Codex/OpenAI model to use |
+
+**Note:** Codex requires an OpenAI API key. Set it via environment variable:
+
+```bash
+export OPENAI_API_KEY="your-api-key-here"
+```
+
+Or authenticate interactively by running `codex` once (supports ChatGPT Plus/Pro/Business accounts).
 
 ---
 
@@ -319,7 +351,10 @@ Configuration is managed via command-line arguments or environment variables.
 
 - Python 3.8+
 - `mosquitto_sub` and `mosquitto_pub` (mosquitto-clients)
-- Gemini CLI (`/opt/homebrew/bin/gemini`)
+- At least one AI CLI tool:
+  - Gemini CLI (`/opt/homebrew/bin/gemini`)
+  - Claude CLI (`npm i -g @anthropic-ai/claude-code`)
+  - Codex CLI (`npm i -g @openai/codex`)
 - MCP Python library (`mcp`)
 
 ### Installation
@@ -333,40 +368,95 @@ apt install mosquitto-clients  # Linux
 # Install Python dependencies
 pip install mcp
 
-# Install Gemini CLI (follow Gemini documentation)
+# Install AI CLI tools (choose one or more)
+# Gemini - follow Google's Gemini CLI documentation
+# Claude
+npm i -g @anthropic-ai/claude-code
+# Codex/OpenAI
+npm i -g @openai/codex
 ```
 
 ---
 
-## Usage
+## MCP Server Configuration
 
-### Start the MCP Server
+The MCP server (`mcp_mqtt_server.py`) exposes MQTT tools to the AI. Each AI provider has its own way of registering MCP servers.
 
-The MCP server must be configured in your Gemini CLI settings. Add to your MCP configuration:
+### Gemini MCP Configuration
+
+Gemini looks for MCP servers in `~/.gemini/settings.json`. Add the mqtt-tools server:
 
 ```json
 {
   "mcpServers": {
     "mqtt-tools": {
       "command": "python",
-      "args": ["mcp_mqtt_server.py"],
-      "cwd": "/path/to/mqtt-fun"
+      "args": ["/path/to/mqtt2ai/mcp_mqtt_server.py"],
+      "cwd": "/path/to/mqtt2ai"
     }
   }
 }
 ```
 
+The daemon uses `--allowed-mcp-server-names mqtt-tools` to enable this server.
+
+### Claude MCP Configuration
+
+Claude uses a JSON config file. Create `~/.config/claude/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "mqtt-tools": {
+      "command": "python",
+      "args": ["/path/to/mqtt2ai/mcp_mqtt_server.py"]
+    }
+  }
+}
+```
+
+Then run the daemon with:
+
+```bash
+python mqtt_ai_daemon.py --ai-provider claude --claude-mcp-config ~/.config/claude/mcp.json
+```
+
+### Codex/OpenAI MCP Configuration
+
+Codex uses a TOML config file at `~/.codex/config.toml`. Add:
+
+```toml
+[mcp_servers.mqtt-tools]
+command = "python"
+args = ["/path/to/mqtt2ai/mcp_mqtt_server.py"]
+```
+
+The daemon will automatically use MCP servers configured in this file.
+
+---
+
+## Usage
+
 ### Run the Daemon
 
 ```bash
-# Normal mode (uses defaults)
+# With Gemini (default)
 python3 mqtt_ai_daemon.py
+
+# With Claude
+python3 mqtt_ai_daemon.py --ai-provider claude --claude-mcp-config ~/.config/claude/mcp.json
+
+# With Codex/OpenAI
+python3 mqtt_ai_daemon.py --ai-provider codex-openai
 
 # Verbose mode (print all messages)
 python3 mqtt_ai_daemon.py --verbose
 
-# Custom MQTT host and model
-python3 mqtt_ai_daemon.py --mqtt-host 192.168.1.50 --model gemini-2.0-flash
+# No-AI mode (logging only, for testing triggers)
+python3 mqtt_ai_daemon.py --no-ai -v
+
+# Custom MQTT host
+python3 mqtt_ai_daemon.py --mqtt-host 192.168.1.50
 
 # Show all options
 python3 mqtt_ai_daemon.py --help

@@ -21,7 +21,7 @@ class Config:
     rejected_patterns_file: str = "rejected_patterns.json"
     
     # AI Provider
-    ai_provider: str = "gemini"  # "gemini" or "claude"
+    ai_provider: str = "gemini"  # "gemini", "claude", or "codex-openai"
     
     # Gemini
     gemini_command: str = "/opt/homebrew/bin/gemini"
@@ -32,10 +32,15 @@ class Config:
     claude_model: str = "claude-3-5-haiku-latest"
     claude_mcp_config: str = ""  # Path to MCP config file for Claude
     
+    # Codex (OpenAI)
+    codex_command: str = "codex"  # Assumes npm global install puts it in PATH
+    codex_model: str = "o4-mini"
+    
     # Filtering & Display
     verbose: bool = False
     demo_mode: bool = False
     no_ai: bool = False  # Run without making AI calls (logging only)
+    test_ai: bool = False  # Test AI connection before starting daemon
     skip_printing_seconds: int = 3
     ignore_printing_topics: List[str] = field(default_factory=lambda: ["zigbee2mqtt/bridge/logging", "zigbee2mqtt/bridge/health"])
     ignore_printing_prefixes: List[str] = field(default_factory=list)
@@ -48,7 +53,7 @@ class Config:
         parser.add_argument("--mqtt-port", default=os.environ.get("MQTT_PORT", "1883"), help="MQTT Broker Port")
         
         # AI Provider
-        parser.add_argument("--ai-provider", choices=["gemini", "claude"], default=os.environ.get("AI_PROVIDER", "gemini"), help="AI provider to use (gemini or claude)")
+        parser.add_argument("--ai-provider", choices=["gemini", "claude", "codex-openai"], default=os.environ.get("AI_PROVIDER", "gemini"), help="AI provider to use (gemini, claude, or codex-openai)")
         
         # Gemini CLI
         parser.add_argument("--gemini-command", default=os.environ.get("GEMINI_CLI_COMMAND", "/opt/homebrew/bin/gemini"), help="Path to Gemini CLI")
@@ -59,9 +64,14 @@ class Config:
         parser.add_argument("--claude-model", default="claude-3-5-haiku-latest", help="Claude Model ID")
         parser.add_argument("--claude-mcp-config", default=os.environ.get("CLAUDE_MCP_CONFIG", ""), help="Path to MCP config file for Claude")
         
+        # Codex CLI (OpenAI)
+        parser.add_argument("--codex-command", default=os.environ.get("CODEX_CLI_COMMAND", "codex"), help="Path to Codex CLI")
+        parser.add_argument("--codex-model", default="o4-mini", help="Codex/OpenAI Model ID")
+        
         parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
         parser.add_argument("--demo", action="store_true", help="Enable demo mode")
         parser.add_argument("--no-ai", action="store_true", help="Disable AI calls (logging only mode)")
+        parser.add_argument("--test-ai", action="store_true", help="Test AI connection before starting daemon")
         
         args = parser.parse_args()
         
@@ -74,8 +84,11 @@ class Config:
         c.claude_command = args.claude_command
         c.claude_model = args.claude_model
         c.claude_mcp_config = args.claude_mcp_config
+        c.codex_command = args.codex_command
+        c.codex_model = args.codex_model
         c.verbose = args.verbose
         c.demo_mode = args.demo
         c.no_ai = args.no_ai
+        c.test_ai = args.test_ai
         return c
 

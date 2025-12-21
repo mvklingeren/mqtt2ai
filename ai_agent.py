@@ -14,7 +14,7 @@ def timestamp() -> str:
 
 
 class AiAgent:
-    """Handles interaction with AI CLI tools (Gemini or Claude)."""
+    """Handles interaction with AI CLI tools (Gemini, Claude, or Codex)."""
     def __init__(self, config: Config):
         self.config = config
 
@@ -30,6 +30,14 @@ class AiAgent:
             # Add MCP config if specified
             if self.config.claude_mcp_config:
                 args.extend(["--mcp-config", self.config.claude_mcp_config])
+            return cmd, args
+        elif self.config.ai_provider == "codex-openai":
+            cmd = self.config.codex_command
+            args = [
+                cmd,
+                "--model", self.config.codex_model,
+                "--full-auto",  # Auto-approve mode
+            ]
             return cmd, args
         else:  # gemini (default)
             cmd = self.config.gemini_command
@@ -127,4 +135,43 @@ class AiAgent:
             logging.error(f"{provider} CLI failed with exit code {e.returncode}: {e.stderr}")
         except Exception as e:
             logging.error(f"Unexpected error during AI check: {e}")
+
+    def test_connection(self) -> tuple[bool, str]:
+        """
+        Test AI connection by asking it to write a joke and send it via MCP.
+        
+        Returns:
+            Tuple of (success: bool, message: str with AI response or error)
+        """
+        provider = self.config.ai_provider.upper()
+        cli_cmd, cli_args = self._get_cli_command()
+        
+        # Check if CLI executable exists
+        if not os.access(cli_cmd, os.X_OK):
+            return False, f"{provider} CLI not found or not executable at '{cli_cmd}'"
+        
+        test_prompt = (
+            "This is a connection test. Write a short, funny joke and send it using the "
+            "send_mqtt_message tool to topic 'test/ai_joke'. After sending, confirm what you did."
+        )
+        
+        try:
+            result = subprocess.run(
+                cli_args,
+                input=test_prompt,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=60,
+            )
+            
+            response_text = result.stdout.strip()
+            return True, response_text
+            
+        except subprocess.TimeoutExpired:
+            return False, f"{provider} CLI timed out after 60 seconds"
+        except subprocess.CalledProcessError as e:
+            return False, f"{provider} CLI failed with exit code {e.returncode}: {e.stderr}"
+        except Exception as e:
+            return False, f"Unexpected error: {e}"
 
