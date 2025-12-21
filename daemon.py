@@ -63,7 +63,10 @@ class MqttAiDaemon:
         self.collector_thread = threading.Thread(target=self._collector_loop, daemon=True)
         self.collector_thread.start()
         
-        logging.info(f"Daemon started. AI checks every {self.config.ai_check_interval}s, {self.config.ai_check_threshold} msgs, or on smart trigger.")
+        if self.config.no_ai:
+            logging.info("Daemon started in NO-AI MODE (logging only, no AI calls)")
+        else:
+            logging.info(f"Daemon started. AI checks every {self.config.ai_check_interval}s, {self.config.ai_check_threshold} msgs, or on smart trigger.")
         
         self._main_loop()
 
@@ -95,9 +98,12 @@ class MqttAiDaemon:
                         last_check_time = time.time()
                     
                     if snapshot:
-                        # Reload knowledge base to get any updates from tools/external edits
-                        self.kb.load_all()
-                        self.ai.run_analysis(snapshot, self.kb, reason)
+                        if self.config.no_ai:
+                            logging.info(f"[NO-AI MODE] Would have triggered AI check (reason: {reason}), {len(snapshot.splitlines())} messages")
+                        else:
+                            # Reload knowledge base to get any updates from tools/external edits
+                            self.kb.load_all()
+                            self.ai.run_analysis(snapshot, self.kb, reason)
                         
         except KeyboardInterrupt:
             logging.info("Stopping daemon (KeyboardInterrupt)...")

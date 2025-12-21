@@ -14,14 +14,38 @@ def timestamp() -> str:
 
 
 class AiAgent:
-    """Handles interaction with the Gemini CLI."""
+    """Handles interaction with AI CLI tools (Gemini or Claude)."""
     def __init__(self, config: Config):
         self.config = config
 
+    def _get_cli_command(self) -> tuple[str, list[str]]:
+        """Returns the CLI executable path and arguments based on the configured provider."""
+        if self.config.ai_provider == "claude":
+            cmd = self.config.claude_command
+            args = [
+                cmd,
+                "--dangerously-skip-permissions",
+                "--model", self.config.claude_model,
+            ]
+            # Add MCP config if specified
+            if self.config.claude_mcp_config:
+                args.extend(["--mcp-config", self.config.claude_mcp_config])
+            return cmd, args
+        else:  # gemini (default)
+            cmd = self.config.gemini_command
+            args = [
+                cmd,
+                "--yolo",
+                "--model", self.config.gemini_model,
+                "--allowed-mcp-server-names", "mqtt-tools",
+            ]
+            return cmd, args
+
     def run_analysis(self, messages_snapshot: str, kb: KnowledgeBase, trigger_reason: str):
-        """Constructs the prompt and calls the Gemini CLI."""
+        """Constructs the prompt and calls the configured AI CLI."""
         cyan, reset = "\033[96m", "\033[0m"
-        logging.info(f"{cyan}--- AI Check Started (reason: {trigger_reason}) ---{reset}")
+        provider = self.config.ai_provider.upper()
+        logging.info(f"{cyan}--- AI Check Started [{provider}] (reason: {trigger_reason}) ---{reset}")
         
         demo_instruction = "**Demo mode is ENABLED.** " if self.config.demo_mode else ""
         
@@ -76,18 +100,15 @@ class AiAgent:
         )
 
         try:
-            if not os.access(self.config.gemini_command, os.X_OK):
-                logging.error(f"Error: Gemini CLI not found or not executable at '{self.config.gemini_command}'")
+            cli_cmd, cli_args = self._get_cli_command()
+            
+            if not os.access(cli_cmd, os.X_OK):
+                logging.error(f"Error: {provider} CLI not found or not executable at '{cli_cmd}'")
                 return
 
-            # Call Gemini
+            # Call AI CLI
             result = subprocess.run(
-                [
-                    self.config.gemini_command,
-                    "--yolo",
-                    "--model", self.config.gemini_model,
-                    "--allowed-mcp-server-names", "mqtt-tools",
-                ],
+                cli_args,
                 input=prompt,
                 capture_output=True,
                 text=True,
@@ -101,9 +122,9 @@ class AiAgent:
             print(f"{timestamp()} AI Response: {light_blue}{response_text}{reset_color}")
 
         except subprocess.TimeoutExpired:
-            logging.error("Gemini CLI timed out after 120 seconds")
+            logging.error(f"{provider} CLI timed out after 120 seconds")
         except subprocess.CalledProcessError as e:
-            logging.error(f"Gemini CLI failed with exit code {e.returncode}: {e.stderr}")
+            logging.error(f"{provider} CLI failed with exit code {e.returncode}: {e.stderr}")
         except Exception as e:
             logging.error(f"Unexpected error during AI check: {e}")
 
