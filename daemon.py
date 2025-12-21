@@ -209,26 +209,13 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
 
         while self.running:
             try:
-                # Use select for non-blocking check with timeout on Unix
-                if sys.platform != 'win32':
-                    ready, _, _ = select.select([sys.stdin], [], [], 1.0)
-                    if ready:
-                        line = sys.stdin.readline()
-                        if line == '\n' or line == '':
-                            self.manual_trigger = True
-                            self.ai_event.set()
-                            logging.info("Manual AI check triggered")
-                else:
-                    # Windows fallback - blocking read
-                    import msvcrt  # pylint: disable=import-outside-toplevel
-                    if msvcrt.kbhit():
-                        key = msvcrt.getch()
-                        if key == b'\r' or key == b'\n':
-                            self.manual_trigger = True
-                            self.ai_event.set()
-                            logging.info("Manual AI check triggered")
-                    else:
-                        time.sleep(0.1)
+                ready, _, _ = select.select([sys.stdin], [], [], 1.0)
+                if ready:
+                    line = sys.stdin.readline()
+                    if line == '\n' or line == '':
+                        self.manual_trigger = True
+                        self.ai_event.set()
+                        logging.info("Manual AI check triggered")
             except Exception:  # pylint: disable=broad-exception-caught
                 # Stdin might not be available (e.g., when running as service)
                 time.sleep(1.0)
