@@ -65,6 +65,8 @@ def print_banner(config: Config):
         model = config.claude_model
     elif provider == "codex-openai":
         model = config.codex_model
+    elif provider == "openai-compatible":
+        model = config.openai_model
     else:
         model = "unknown"
 

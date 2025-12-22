@@ -1,7 +1,8 @@
 """AI Agent module for the MQTT AI Daemon.
 
 This module handles interaction with AI CLI tools (Gemini, Claude, or Codex)
-for analyzing MQTT messages and making automation decisions.
+or OpenAI-compatible APIs (Ollama, LM Studio, etc.) for analyzing MQTT 
+messages and making automation decisions.
 """
 import subprocess
 import shutil
@@ -9,8 +10,250 @@ import json
 import logging
 from datetime import datetime
 
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
 from config import Config
 from knowledge_base import KnowledgeBase
+
+# Import MCP tool implementations for OpenAI function calling
+# pylint: disable=import-outside-toplevel
+def _get_mcp_tools():
+    """Lazy import of MCP tools to avoid circular imports."""
+    import mcp_mqtt_server as mcp
+    return mcp
+
+
+# OpenAI function definitions for MCP tools
+OPENAI_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "send_mqtt_message",
+            "description": "Send a message to an MQTT topic.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "The MQTT topic to publish to (e.g., 'zigbee2mqtt/light/set')"
+                    },
+                    "payload": {
+                        "type": "string",
+                        "description": "The message payload, typically a JSON string (e.g., '{\"state\": \"ON\"}')"
+                    }
+                },
+                "required": ["topic", "payload"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "record_pattern_observation",
+            "description": "Record an observation of a potential trigger->action pattern. Call this when you detect a user manually performing an action after a trigger event. After 3 observations, use create_rule to formalize the pattern.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trigger_topic": {
+                        "type": "string",
+                        "description": "The MQTT topic that triggered (e.g., 'zigbee2mqtt/hallway_pir')"
+                    },
+                    "trigger_field": {
+                        "type": "string",
+                        "description": "The field that changed (e.g., 'occupancy')"
+                    },
+                    "action_topic": {
+                        "type": "string",
+                        "description": "The action topic the user interacted with (e.g., 'zigbee2mqtt/hallway_light/set')"
+                    },
+                    "delay_seconds": {
+                        "type": "number",
+                        "description": "Time in seconds between trigger and user action"
+                    }
+                },
+                "required": ["trigger_topic", "trigger_field", "action_topic", "delay_seconds"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_rule",
+            "description": "Create or update an automation rule based on learned patterns. Use after 3+ pattern observations.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "rule_id": {
+                        "type": "string",
+                        "description": "Unique identifier for the rule (e.g., 'hallway_pir_to_light')"
+                    },
+                    "trigger_topic": {
+                        "type": "string",
+                        "description": "MQTT topic that triggers the rule"
+                    },
+                    "trigger_field": {
+                        "type": "string",
+                        "description": "JSON field to monitor (e.g., 'occupancy', 'contact')"
+                    },
+                    "trigger_value": {
+                        "type": "string",
+                        "description": "Value that triggers the rule as JSON (e.g., 'true', '\"ON\"')"
+                    },
+                    "action_topic": {
+                        "type": "string",
+                        "description": "MQTT topic to publish to when triggered"
+                    },
+                    "action_payload": {
+                        "type": "string",
+                        "description": "Payload to send (e.g., '{\"state\": \"ON\"}')"
+                    },
+                    "avg_delay_seconds": {
+                        "type": "number",
+                        "description": "Average delay observed before user action"
+                    },
+                    "tolerance_seconds": {
+                        "type": "number",
+                        "description": "Tolerance window for timing"
+                    }
+                },
+                "required": ["rule_id", "trigger_topic", "trigger_field", "trigger_value",
+                            "action_topic", "action_payload", "avg_delay_seconds", "tolerance_seconds"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reject_pattern",
+            "description": "Reject a pattern to prevent it from being learned. Use when a pattern is coincidental.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trigger_topic": {
+                        "type": "string",
+                        "description": "The MQTT trigger topic"
+                    },
+                    "trigger_field": {
+                        "type": "string",
+                        "description": "The field that triggers (e.g., 'occupancy')"
+                    },
+                    "action_topic": {
+                        "type": "string",
+                        "description": "The action topic"
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional reason for rejection"
+                    }
+                },
+                "required": ["trigger_topic", "trigger_field", "action_topic"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "report_undo",
+            "description": "Report that a user undid an automated action. Call when user reversed your action within 30 seconds.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "rule_id": {
+                        "type": "string",
+                        "description": "The ID of the rule that was undone"
+                    }
+                },
+                "required": ["rule_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "toggle_rule",
+            "description": "Enable or disable a learned automation rule.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "rule_id": {
+                        "type": "string",
+                        "description": "The ID of the rule to toggle"
+                    },
+                    "enabled": {
+                        "type": "boolean",
+                        "description": "True to enable, False to disable"
+                    }
+                },
+                "required": ["rule_id", "enabled"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_learned_rules",
+            "description": "Get all learned automation rules.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_pending_patterns",
+            "description": "Get all pending patterns being tracked but not yet rules.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    }
+]
+
+
+def execute_tool_call(tool_name: str, arguments: dict) -> str:
+    """Execute an MCP tool and return the result."""
+    mcp = _get_mcp_tools()
+    
+    tool_map = {
+        "send_mqtt_message": lambda args: mcp.send_mqtt_message(
+            args["topic"], args["payload"]
+        ),
+        "record_pattern_observation": lambda args: mcp.record_pattern_observation(
+            args["trigger_topic"], args["trigger_field"],
+            args["action_topic"], args["delay_seconds"]
+        ),
+        "create_rule": lambda args: mcp.create_rule(
+            args["rule_id"], args["trigger_topic"], args["trigger_field"],
+            args["trigger_value"], args["action_topic"], args["action_payload"],
+            args["avg_delay_seconds"], args["tolerance_seconds"]
+        ),
+        "reject_pattern": lambda args: mcp.reject_pattern(
+            args["trigger_topic"], args["trigger_field"],
+            args["action_topic"], args.get("reason", "")
+        ),
+        "report_undo": lambda args: mcp.report_undo(args["rule_id"]),
+        "toggle_rule": lambda args: mcp.toggle_rule(
+            args["rule_id"], args["enabled"]
+        ),
+        "get_learned_rules": lambda args: mcp.get_learned_rules(),
+        "get_pending_patterns": lambda args: mcp.get_pending_patterns(),
+    }
+    
+    if tool_name in tool_map:
+        try:
+            return tool_map[tool_name](arguments)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            return f"Error executing {tool_name}: {e}"
+    return f"Unknown tool: {tool_name}"
 
 
 def timestamp() -> str:
@@ -212,6 +455,126 @@ class AiAgent:
         return prompt
 
     def _execute_ai_call(self, provider: str, prompt: str):
+        """Execute the AI call (CLI or API based on provider)."""
+        if self.config.ai_provider == "openai-compatible":
+            self._execute_openai_api_call(provider, prompt)
+        else:
+            self._execute_cli_call(provider, prompt)
+
+    def _execute_openai_api_call(self, provider: str, prompt: str):
+        """Execute AI call via OpenAI-compatible API with function calling."""
+        if not OPENAI_AVAILABLE:
+            logging.error(
+                "OpenAI SDK not installed. Run: pip install openai"
+            )
+            return
+
+        try:
+            client = OpenAI(
+                base_url=self.config.openai_api_base,
+                api_key=self.config.openai_api_key,
+            )
+
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a home automation AI assistant with access to MQTT tools. "
+                        "Analyze MQTT messages and take actions using the available functions. "
+                        "When you detect trigger->action patterns, call record_pattern_observation. "
+                        "After 3+ observations, call create_rule to formalize the automation. "
+                        "Use send_mqtt_message to control devices directly when needed."
+                    )
+                },
+                {"role": "user", "content": prompt}
+            ]
+
+            cyan, reset = "\033[96m", "\033[0m"
+            purple = "\033[95m"  # Magenta/purple for tool calls
+            max_iterations = 10  # Prevent infinite loops
+
+            # Try with tool calling first, fall back to no tools if server doesn't support it
+            use_tools = True
+
+            for iteration in range(max_iterations):
+                try:
+                    if use_tools:
+                        response = client.chat.completions.create(
+                            model=self.config.openai_model,
+                            messages=messages,
+                            tools=OPENAI_TOOLS,
+                            tool_choice="auto",
+                            timeout=120,
+                        )
+                    else:
+                        response = client.chat.completions.create(
+                            model=self.config.openai_model,
+                            messages=messages,
+                            timeout=120,
+                        )
+                except Exception as api_err:
+                    # Check if error is about tool calling not being supported
+                    err_str = str(api_err)
+                    if "tool" in err_str.lower() and use_tools:
+                        logging.warning(
+                            "Server doesn't support tool calling, falling back to text-only mode"
+                        )
+                        use_tools = False
+                        response = client.chat.completions.create(
+                            model=self.config.openai_model,
+                            messages=messages,
+                            timeout=120,
+                        )
+                    else:
+                        raise
+
+                message = response.choices[0].message
+
+                # Check if the model wants to call functions
+                if message.tool_calls:
+                    # Add the assistant's response to messages
+                    messages.append(message)
+
+                    # Process each tool call
+                    for tool_call in message.tool_calls:
+                        func_name = tool_call.function.name
+                        try:
+                            func_args = json.loads(tool_call.function.arguments)
+                        except json.JSONDecodeError:
+                            func_args = {}
+
+                        logging.info(
+                            "%s[Tool Call] %s(%s)%s",
+                            purple, func_name, json.dumps(func_args), reset
+                        )
+
+                        # Execute the tool
+                        result = execute_tool_call(func_name, func_args)
+                        logging.info(
+                            "%s[Tool Result] %s%s", purple, result, reset
+                        )
+
+                        # Add the tool result to messages
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": result
+                        })
+                else:
+                    # No more tool calls, get the final response
+                    if message.content:
+                        logging.info(
+                            "%sAI Response: %s%s",
+                            cyan, message.content.strip(), reset
+                        )
+                    break
+            else:
+                logging.warning("Max tool call iterations reached")
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.error("OpenAI API error: %s", e)
+
+    def _execute_cli_call(self, provider: str, prompt: str):
         """Execute the AI CLI call."""
         try:
             cli_cmd, cli_args = self._get_cli_command()
@@ -249,12 +612,94 @@ class AiAgent:
 
     def test_connection(self) -> tuple[bool, str]:
         """
-        Test AI connection by asking it to write a joke and send it via MCP.
+        Test AI connection by asking it to write a joke.
 
         Returns:
             Tuple of (success: bool, message: str with AI response or error)
         """
         provider = self.config.ai_provider.upper()
+
+        # Use OpenAI API for openai-compatible provider
+        if self.config.ai_provider == "openai-compatible":
+            return self._test_openai_connection(provider)
+
+        return self._test_cli_connection(provider)
+
+    def _test_openai_connection(self, provider: str) -> tuple[bool, str]:
+        """Test connection to OpenAI-compatible API with function calling."""
+        if not OPENAI_AVAILABLE:
+            return False, "OpenAI SDK not installed. Run: pip install openai"
+
+        try:
+            client = OpenAI(
+                base_url=self.config.openai_api_base,
+                api_key=self.config.openai_api_key,
+            )
+
+            # First test: basic completion
+            response = client.chat.completions.create(
+                model=self.config.openai_model,
+                messages=[
+                    {"role": "user", "content": "Write a very short, funny one-liner joke."}
+                ],
+                timeout=60,
+            )
+            joke = response.choices[0].message.content.strip()
+
+            # Second test: try function calling with send_mqtt_message
+            tool_call_info = ""
+            try:
+                response = client.chat.completions.create(
+                    model=self.config.openai_model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": "Send a test message with your joke to MQTT topic 'test/ai_joke'. Use the send_mqtt_message function."
+                        }
+                    ],
+                    tools=OPENAI_TOOLS,
+                    tool_choice="auto",
+                    timeout=60,
+                )
+
+                message = response.choices[0].message
+                
+                if message.tool_calls:
+                    for tool_call in message.tool_calls:
+                        func_name = tool_call.function.name
+                        func_args = tool_call.function.arguments
+                        tool_call_info = f"\n\nFunction calling works! Called: {func_name}({func_args})"
+                        
+                        # Actually execute the tool call for the test
+                        try:
+                            args = json.loads(func_args)
+                            result = execute_tool_call(func_name, args)
+                            tool_call_info += f"\nResult: {result}"
+                        except Exception as e:  # pylint: disable=broad-exception-caught
+                            tool_call_info += f"\nExecution error: {e}"
+                else:
+                    tool_call_info = "\n\nNote: Model did not use function calling for the test request."
+
+            except Exception as tool_err:  # pylint: disable=broad-exception-caught
+                err_str = str(tool_err)
+                if "tool" in err_str.lower():
+                    tool_call_info = (
+                        "\n\nNote: Server doesn't support tool calling. "
+                        "To enable, restart vLLM with: --enable-auto-tool-choice --tool-call-parser hermes"
+                    )
+                else:
+                    tool_call_info = f"\n\nFunction calling test failed: {tool_err}"
+
+            return True, (
+                f"Connected to {self.config.openai_api_base} using model {self.config.openai_model}\n\n"
+                f"Joke: {joke}{tool_call_info}"
+            )
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            return False, f"OpenAI API error: {e}"
+
+    def _test_cli_connection(self, provider: str) -> tuple[bool, str]:
+        """Test connection to CLI-based AI provider."""
         cli_cmd, cli_args = self._get_cli_command()
 
         # Check if CLI executable exists

@@ -49,6 +49,11 @@ class Config:  # pylint: disable=too-many-instance-attributes
     codex_command: str = "codex"  # Assumes npm global install puts it in PATH
     codex_model: str = "gpt-5-nano" #"gpt-4.1-mini"
 
+    # OpenAI-compatible API (Ollama, LM Studio, vLLM, etc.)
+    openai_api_base: str = "https://rimrhxmmxh4svi-8000.proxy.runpod.net/v1"  # RunPod vLLM
+    openai_api_key: str = "xyz"  # RunPod API key
+    openai_model: str = "Qwen/Qwen3-4B-Instruct-2507"  # Model name as shown in /v1/models
+
     # Filtering & Display
     verbose: bool = False
     compress_output: bool = False  # Compress MQTT payloads in console output
@@ -90,9 +95,9 @@ class Config:  # pylint: disable=too-many-instance-attributes
         # AI Provider
         parser.add_argument(
             "--ai-provider",
-            choices=["gemini", "claude", "codex-openai"],
+            choices=["gemini", "claude", "codex-openai", "openai-compatible"],
             default=os.environ.get("AI_PROVIDER", "codex-openai"),
-            help="AI provider to use (gemini, claude, or codex-openai)"
+            help="AI provider to use (gemini, claude, codex-openai, or openai-compatible)"
         )
 
         # Gemini CLI
@@ -135,6 +140,23 @@ class Config:  # pylint: disable=too-many-instance-attributes
             "--codex-model",
             default="gpt-5-nano",
             help="Codex/OpenAI Model ID"
+        )
+
+        # OpenAI-compatible API (Ollama, LM Studio, vLLM, etc.)
+        parser.add_argument(
+            "--openai-api-base",
+            default=os.environ.get("OPENAI_API_BASE", "https://rimrhxmmph4svi-8000.proxy.runpod.net/v1"),
+            help="Base URL for OpenAI-compatible API (e.g., RunPod vLLM, Ollama, LM Studio)"
+        )
+        parser.add_argument(
+            "--openai-api-key",
+            default=os.environ.get("OPENAI_API_KEY", "sk-placeholder"),
+            help="API key for OpenAI-compatible API"
+        )
+        parser.add_argument(
+            "--openai-model",
+            default=os.environ.get("OPENAI_MODEL", "Qwen/Qwen3-4B-Instruct-2507"),
+            help="Model name for OpenAI-compatible API (e.g., Qwen/Qwen3-4B-Instruct-2507)"
         )
 
         parser.add_argument(
@@ -181,6 +203,9 @@ class Config:  # pylint: disable=too-many-instance-attributes
         c.claude_mcp_config = args.claude_mcp_config
         c.codex_command = args.codex_command
         c.codex_model = args.codex_model
+        c.openai_api_base = args.openai_api_base
+        c.openai_api_key = args.openai_api_key
+        c.openai_model = args.openai_model
         c.verbose = args.verbose
         c.compress_output = args.compress
         c.demo_mode = args.demo

@@ -363,6 +363,69 @@ class TestAiAgentTestConnection:
                 assert "failed" in message.lower()
 
 
+class TestAiAgentOpenAICompatible:
+    """Tests for OpenAI-compatible API provider."""
+
+    def test_test_connection_openai_compatible_success(self, config):
+        """Test successful connection to OpenAI-compatible API."""
+        config.ai_provider = "openai-compatible"
+        config.openai_api_base = "http://192.168.1.52:11434/v1"
+        config.openai_model = "llama3.2"
+        agent = AiAgent(config)
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Why did the AI cross the road?"
+
+        mock_openai_class = MagicMock()
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+        mock_client.chat.completions.create.return_value = mock_response
+
+        with patch.dict("sys.modules", {"openai": MagicMock(OpenAI=mock_openai_class)}):
+            with patch("ai_agent.OPENAI_AVAILABLE", True):
+                with patch.object(agent, "_test_openai_connection") as mock_test:
+                    mock_test.return_value = (True, f"Connected to http://192.168.1.52:11434/v1 using model llama3.2\n\nResponse: Why did the AI cross the road?")
+                    success, message = agent.test_connection()
+
+                    assert success is True
+                    assert "192.168.1.52" in message
+                    assert "llama3.2" in message
+
+    def test_test_connection_openai_compatible_sdk_not_installed(self, config):
+        """Test connection when OpenAI SDK not installed."""
+        config.ai_provider = "openai-compatible"
+        agent = AiAgent(config)
+
+        with patch("ai_agent.OPENAI_AVAILABLE", False):
+            success, message = agent.test_connection()
+
+            assert success is False
+            assert "not installed" in message.lower()
+
+    def test_test_connection_openai_compatible_api_error(self, config):
+        """Test connection when API returns error."""
+        config.ai_provider = "openai-compatible"
+        agent = AiAgent(config)
+
+        with patch("ai_agent.OPENAI_AVAILABLE", True):
+            with patch.object(agent, "_test_openai_connection") as mock_test:
+                mock_test.return_value = (False, "OpenAI API error: Connection refused")
+                success, message = agent.test_connection()
+
+                assert success is False
+                assert "error" in message.lower()
+
+    def test_execute_openai_api_call_sdk_not_available(self, config):
+        """Test OpenAI API call when SDK not available."""
+        config.ai_provider = "openai-compatible"
+        agent = AiAgent(config)
+
+        with patch("ai_agent.OPENAI_AVAILABLE", False):
+            # Should not raise, just log error
+            agent._execute_openai_api_call("OPENAI-COMPATIBLE", "test prompt")
+
+
 class TestAiAgentRunAnalysis:
     """Tests for run_analysis method."""
 
