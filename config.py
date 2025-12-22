@@ -47,7 +47,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
 
     # Codex (OpenAI)
     codex_command: str = "codex"  # Assumes npm global install puts it in PATH
-    codex_model: str = "gpt-4.1-mini"
+    codex_model: str = "gpt-5-nano" #"gpt-4.1-mini"
 
     # Filtering & Display
     verbose: bool = False
@@ -133,7 +133,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
         )
         parser.add_argument(
             "--codex-model",
-            default="gpt-4.1-mini",
+            default="gpt-5-nano",
             help="Codex/OpenAI Model ID"
         )
 
