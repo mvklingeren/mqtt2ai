@@ -15,51 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from config import Config
 from knowledge_base import KnowledgeBase
 from trigger_analyzer import TriggerResult
-
-
-# Compact rulebook - core rules only, no verbose documentation
-COMPACT_RULEBOOK = """## Core Rules
-
-### BEFORE ANY TOOL CALL - CHECK SKIP PATTERNS SECTION FIRST
-If a trigger->action pair appears in SKIP PATTERNS section below, do NOT call:
-- record_pattern_observation (pattern already learned)
-- create_rule (rule already exists)
-This saves tokens and prevents redundant operations.
-
-### Safety (CRITICAL - ACT IMMEDIATELY)
-- smoke:true → Activate siren, send emergency notification
-- water_leak:true → Activate siren, send emergency notification
-- temperature > 50°C → Activate siren, send emergency notification
-
-### Security (when armed_home or armed_away)
-- Door/window opened (contact:false) → Activate siren + notification
-- Motion detected (occupancy:true) → Activate siren + notification
-
-### Pattern Learning
-1. Messages prefixed with [SKIP-LEARNED] already have rules - DO NOT call record_pattern_observation
-2. Messages prefixed with [STATUS] are device state feedback AFTER a /set command - NEVER use as triggers
-3. Messages prefixed with [AUTO] are automated actions (by rule engine or AI) - NEVER use for pattern learning
-4. Only SENSORS (PIR, door contacts, buttons) can be triggers - NOT device state reports
-5. Valid trigger→action: sensor event (occupancy, contact, button) → /set command within 0.5-30s
-6. INVALID patterns to ignore:
-   - [STATUS] messages → anything (device feedback is NOT a trigger)
-   - [AUTO] messages → anything (automated actions are NOT user behavior)
-   - topic/set → same topic (circular/self-triggering)
-   - topic → topic/set where topic is the SAME device (status→command loop)
-7. Call record_pattern_observation ONLY for valid sensor→action patterns (NO [AUTO] or [STATUS])
-8. After 3+ observations, call create_rule
-9. DO NOT send MQTT messages while learning - only record observations
-
-### Rule Execution
-- Fixed rules are now executed DIRECTLY by the daemon (no AI needed)
-- AI is only invoked for: anomaly detection, pattern learning, safety events
-- If you see [AUTO] messages, the action was already taken - do not duplicate
-
-### Undo Detection
-- If user reverses your action within 30s, call report_undo
-- After 3 undos, call reject_pattern
-"""
-
+from prompt_templates import COMPACT_RULEBOOK
 
 @dataclass
 class MessageStats:
