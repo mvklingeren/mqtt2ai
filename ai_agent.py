@@ -56,7 +56,7 @@ OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "record_pattern_observation",
-            "description": "Record an observation of a potential trigger->action pattern. Call this when you detect a user manually performing an action after a trigger event. After 3 observations, use create_rule to formalize the pattern.",
+            "description": "Record a NEW trigger->action pattern observation. IMPORTANT: First check SKIP PATTERNS section in the prompt - if the trigger[field]->action pair is listed there, DO NOT call this function (rule already exists). Only call for patterns NOT in SKIP PATTERNS.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -85,7 +85,7 @@ OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "create_rule",
-            "description": "Create or update an automation rule based on learned patterns. Use after 3+ pattern observations.",
+            "description": "Create a NEW automation rule after 3+ pattern observations. IMPORTANT: First check SKIP PATTERNS section - if the trigger[field]->action pair is listed there, DO NOT call this function (rule already exists).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -536,6 +536,12 @@ class AiAgent:
                     # non-OpenAI providers like Groq with Llama models
                     messages.append(message.model_dump(exclude_none=True))
 
+                    # Track redundant tool calls for early termination
+                    redundant_patterns = [
+                        "already exists", "No need to re-learn", "No update needed"
+                    ]
+                    redundant_count = 0
+
                     # Process each tool call
                     for tool_call in message.tool_calls:
                         func_name = tool_call.function.name
@@ -555,12 +561,31 @@ class AiAgent:
                             "%s[Tool Result] %s%s", purple, result, reset
                         )
 
+                        # Track if this was a redundant call
+                        if any(p in result for p in redundant_patterns):
+                            redundant_count += 1
+
                         # Add the tool result to messages
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call.id,
                             "content": result
                         })
+
+                    # Early termination: if all tool calls in this iteration were redundant
+                    if redundant_count == len(message.tool_calls) and redundant_count > 0:
+                        logging.info(
+                            "%s[Early Stop] All %d tool calls redundant, stopping iteration%s",
+                            orange_bold, redundant_count, reset
+                        )
+                        # Log total tokens
+                        logging.info(
+                            "%s[AI Total] %d iterations (early stop) | %d prompt + %d completion = %d tokens%s",
+                            orange_bold, iteration + 1, total_prompt_tokens,
+                            total_completion_tokens,
+                            total_prompt_tokens + total_completion_tokens, reset
+                        )
+                        break
 
                     # After first iteration, compress the original prompt to save tokens
                     # The AI has already analyzed the MQTT data and made decisions

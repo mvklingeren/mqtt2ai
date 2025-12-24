@@ -20,6 +20,12 @@ from trigger_analyzer import TriggerResult
 # Compact rulebook - core rules only, no verbose documentation
 COMPACT_RULEBOOK = """## Core Rules
 
+### BEFORE ANY TOOL CALL - CHECK SKIP PATTERNS SECTION FIRST
+If a trigger->action pair appears in SKIP PATTERNS section below, do NOT call:
+- record_pattern_observation (pattern already learned)
+- create_rule (rule already exists)
+This saves tokens and prevents redundant operations.
+
 ### Safety (CRITICAL - ACT IMMEDIATELY)
 - smoke:true → Activate siren, send emergency notification
 - water_leak:true → Activate siren, send emergency notification  
@@ -29,14 +35,13 @@ COMPACT_RULEBOOK = """## Core Rules
 - Door/window opened (contact:false) → Activate siren + notification
 - Motion detected (occupancy:true) → Activate siren + notification
 
-### Pattern Learning (PRIMARY TASK)
-1. Look for trigger→action sequences (any sensor event followed by /set command)
-   - Examples: PIR occupancy:true → light ON, door contact:false → light ON, power spike → alert
-2. If delay is 0.5-30s, call record_pattern_observation with the TRIGGER VALUE that caused action
-   - Use the value that PRECEDED the action (e.g., occupancy:true, NOT occupancy:false)
-3. After 3+ observations, call create_rule
-4. DO NOT re-learn patterns that already have rules (check EXISTING RULES section)
-5. DO NOT send MQTT messages while learning - only record observations
+### Pattern Learning
+1. Messages prefixed with [SKIP-LEARNED] already have rules - DO NOT call record_pattern_observation for them
+2. Also check SKIP PATTERNS section below - if pattern is listed there, do nothing
+3. Only look for NEW trigger→action sequences (sensor event followed by /set command within 0.5-30s)
+4. Call record_pattern_observation ONLY for patterns NOT prefixed with [SKIP-LEARNED] and NOT in SKIP PATTERNS
+5. After 3+ observations, call create_rule
+6. DO NOT send MQTT messages while learning - only record observations
 
 ### Rule Execution
 - ONLY call send_mqtt_message when an ENABLED rule matches the CURRENT trigger
@@ -101,13 +106,16 @@ class PromptBuilder:
         # Extract trigger topic from trigger_result or trigger_reason
         trigger_topic = self._extract_trigger_topic(trigger_result, trigger_reason)
 
-        # Compress messages
-        compressed_messages = self._compress_messages(
-            messages_snapshot, trigger_topic
-        )
-
         # Filter rules and patterns by relevance
         relevant_rules = self._filter_relevant_rules(kb.learned_rules, trigger_topic)
+
+        # Build set of existing rule patterns for message annotation
+        existing_patterns = self._build_existing_patterns_set(kb.learned_rules)
+
+        # Compress messages with annotations for existing rules
+        compressed_messages = self._compress_messages(
+            messages_snapshot, trigger_topic, existing_patterns=existing_patterns
+        )
         relevant_patterns = self._filter_relevant_patterns(
             kb.pending_patterns, trigger_topic
         )
@@ -116,7 +124,9 @@ class PromptBuilder:
         # Build prompt sections
         safety_alert = self._build_safety_alert(trigger_reason)
         demo_instruction = self._build_demo_instruction()
-        rules_section = self._format_rules(relevant_rules, trigger_topic)
+        # Pass both enabled rules (for display) and ALL rules (for skip patterns)
+        all_rules = kb.learned_rules.get("rules", [])
+        rules_section = self._format_rules(relevant_rules, trigger_topic, all_rules)
         patterns_section = self._format_patterns(relevant_patterns)
         rejected_section = self._format_rejected(rejected_patterns)
 
@@ -146,15 +156,19 @@ class PromptBuilder:
         Targets ~2000 tokens for Ollama/Groq.
         """
         trigger_topic = self._extract_trigger_topic(trigger_result, trigger_reason)
-        
-        # More aggressive compression for compact mode
-        compressed_messages = self._compress_messages(
-            messages_snapshot, trigger_topic, max_lines=50, max_chars=4000
-        )
 
         # Only include directly matching rules
         relevant_rules = self._filter_relevant_rules(
             kb.learned_rules, trigger_topic, strict=True
+        )
+
+        # Build set of existing rule patterns for message annotation
+        existing_patterns = self._build_existing_patterns_set(kb.learned_rules)
+        
+        # More aggressive compression for compact mode with annotations
+        compressed_messages = self._compress_messages(
+            messages_snapshot, trigger_topic, max_lines=50, max_chars=4000,
+            existing_patterns=existing_patterns
         )
 
         # Build minimal prompt
@@ -217,12 +231,33 @@ Tasks (in order):
             
         return None
 
+    def _build_existing_patterns_set(
+        self,
+        learned_rules: Dict[str, Any]
+    ) -> set:
+        """Build a set of (trigger_topic, trigger_field, action_topic) tuples from existing rules.
+        
+        This is used to annotate MQTT messages that match existing patterns,
+        making it visually clear to the AI that these patterns are already learned.
+        """
+        patterns = set()
+        for rule in learned_rules.get("rules", []):
+            trigger = rule.get("trigger", {})
+            action = rule.get("action", {})
+            trigger_topic = trigger.get("topic", "")
+            trigger_field = trigger.get("field", "")
+            action_topic = action.get("topic", "")
+            if trigger_topic and trigger_field and action_topic:
+                patterns.add((trigger_topic, trigger_field, action_topic))
+        return patterns
+
     def _compress_messages(
         self,
         messages_snapshot: str,
         trigger_topic: Optional[str],
         max_lines: int = 100,
-        max_chars: int = 8000
+        max_chars: int = 8000,
+        existing_patterns: Optional[set] = None
     ) -> str:
         """Compress MQTT messages with deduplication and counts.
         
@@ -309,6 +344,19 @@ Tasks (in order):
                 continue
 
             line = self._format_stats_line(stats)
+            
+            # Annotate messages that have existing rules with PREFIX so AI sees it first
+            if existing_patterns:
+                for trigger_field in stats.payload.keys():
+                    # Check if this topic+field has a rule to any action
+                    for pattern in existing_patterns:
+                        if pattern[0] == stats.topic and pattern[1] == trigger_field:
+                            line = "[SKIP-LEARNED] " + line
+                            break
+                    else:
+                        continue
+                    break
+            
             output_lines.append(line)
 
         # Add omitted count if any
@@ -470,29 +518,56 @@ Tasks (in order):
     def _format_rules(
         self,
         rules: List[Dict[str, Any]],
-        trigger_topic: Optional[str]
+        trigger_topic: Optional[str],
+        all_rules: Optional[List[Dict[str, Any]]] = None
     ) -> str:
-        """Format rules section for prompt."""
+        """Format rules section for prompt.
+        
+        Args:
+            rules: Filtered/enabled rules to display for execution
+            trigger_topic: Topic that triggered analysis
+            all_rules: ALL rules (enabled and disabled) for SKIP PATTERNS section
+        """
+        # Display section for enabled rules
         if not rules:
-            return "\n## Learned Rules: None yet.\n"
+            rules_section = "\n## Learned Rules: None yet.\n"
+        else:
+            lines = ["\n## Learned Rules (execute when triggers match):"]
+            for rule in rules:
+                rule_id = rule.get("id", "unknown")
+                trigger = rule.get("trigger", {})
+                action = rule.get("action", {})
+                occurrences = rule.get("confidence", {}).get("occurrences", 0)
+                
+                # Mark if this matches the current trigger
+                marker = " ← MATCHES" if trigger_topic and trigger.get("topic") == trigger_topic else ""
+                
+                lines.append(
+                    f"- {rule_id}: {trigger.get('topic')} "
+                    f"[{trigger.get('field')}={trigger.get('value')}] "
+                    f"→ {action.get('topic')} ({occurrences} triggers){marker}"
+                )
+            rules_section = '\n'.join(lines) + '\n'
 
-        lines = ["\n## Learned Rules (execute when triggers match):"]
-        for rule in rules:
-            rule_id = rule.get("id", "unknown")
+        # Use ALL rules (enabled or disabled) for SKIP PATTERNS to prevent re-learning
+        skip_rules = all_rules if all_rules else rules
+        if not skip_rules:
+            return rules_section
+
+        # Add explicit SKIP PATTERNS section to prevent redundant tool calls
+        skip_lines = [
+            "\n## ⚠️ SKIP PATTERNS - RULES ALREADY EXIST ⚠️",
+            "These patterns are ALREADY LEARNED. Calling record_pattern_observation or create_rule for these is WASTEFUL:",
+        ]
+        for rule in skip_rules:
             trigger = rule.get("trigger", {})
             action = rule.get("action", {})
-            occurrences = rule.get("confidence", {}).get("occurrences", 0)
-            
-            # Mark if this matches the current trigger
-            marker = " ← MATCHES" if trigger_topic and trigger.get("topic") == trigger_topic else ""
-            
-            lines.append(
-                f"- {rule_id}: {trigger.get('topic')} "
-                f"[{trigger.get('field')}={trigger.get('value')}] "
-                f"→ {action.get('topic')} ({occurrences} triggers){marker}"
+            skip_lines.append(
+                f"  ✗ {trigger.get('topic')}[{trigger.get('field')}] -> {action.get('topic')}"
             )
+        skip_lines.append("")  # Empty line for separation
 
-        return '\n'.join(lines) + '\n'
+        return rules_section + '\n'.join(skip_lines) + '\n'
 
     def _format_patterns(self, patterns: List[Dict[str, Any]]) -> str:
         """Format pending patterns section for prompt."""
