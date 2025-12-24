@@ -34,12 +34,13 @@ class Config:  # pylint: disable=too-many-instance-attributes
     mqtt_topics: List[str] = field(
         default_factory=lambda: [
             "zigbee2mqtt/#",
-            "jokes/#"
+            "jokes/#",
+            "mqtt2ai/#"  # Causation announcements for automated actions
         ]
     )
-    max_messages: int = 500  # Keep last 500 messages in buffer
-    ai_check_interval: int = 300  # 5 minutes
-    ai_check_threshold: int = 200  # Trigger AI after 200 messages
+    max_messages: int = 1000  # Keep last 500 messages in buffer
+    ai_check_interval: int = 600  # 10 minutes
+    ai_check_threshold: int = 300  # Trigger AI after 200 messages
 
     # Files
     rulebook_file: str = "rulebook.md"

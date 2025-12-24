@@ -38,19 +38,22 @@ This saves tokens and prevents redundant operations.
 ### Pattern Learning
 1. Messages prefixed with [SKIP-LEARNED] already have rules - DO NOT call record_pattern_observation
 2. Messages prefixed with [STATUS] are device state feedback AFTER a /set command - NEVER use as triggers
-3. Only SENSORS (PIR, door contacts, buttons) can be triggers - NOT device state reports
-4. Valid trigger→action: sensor event (occupancy, contact, button) → /set command within 0.5-30s
-5. INVALID patterns to ignore:
+3. Messages prefixed with [AUTO] are automated actions (by rule engine or AI) - NEVER use for pattern learning
+4. Only SENSORS (PIR, door contacts, buttons) can be triggers - NOT device state reports
+5. Valid trigger→action: sensor event (occupancy, contact, button) → /set command within 0.5-30s
+6. INVALID patterns to ignore:
    - [STATUS] messages → anything (device feedback is NOT a trigger)
+   - [AUTO] messages → anything (automated actions are NOT user behavior)
    - topic/set → same topic (circular/self-triggering)
    - topic → topic/set where topic is the SAME device (status→command loop)
-6. Call record_pattern_observation ONLY for valid sensor→action patterns
-7. After 3+ observations, call create_rule
-8. DO NOT send MQTT messages while learning - only record observations
+7. Call record_pattern_observation ONLY for valid sensor→action patterns (NO [AUTO] or [STATUS])
+8. After 3+ observations, call create_rule
+9. DO NOT send MQTT messages while learning - only record observations
 
 ### Rule Execution
-- ONLY call send_mqtt_message when an ENABLED rule matches the CURRENT trigger
-- If rule is disabled [OFF], do not execute it
+- Fixed rules are now executed DIRECTLY by the daemon (no AI needed)
+- AI is only invoked for: anomaly detection, pattern learning, safety events
+- If you see [AUTO] messages, the action was already taken - do not duplicate
 
 ### Undo Detection
 - If user reverses your action within 30s, call report_undo
@@ -86,6 +89,11 @@ class PromptBuilder:
 
     # Numeric fields that can be aggregated with ranges
     NUMERIC_FIELDS = {"power", "temperature", "humidity", "current", "illuminance"}
+
+    # Topic prefix replacements to shorten common prefixes
+    TOPIC_REPLACEMENTS = {
+        "zigbee2mqtt/": "z2m/",
+    }
 
     def __init__(self, config: Config):
         self.config = config
@@ -280,14 +288,21 @@ Tasks (in order):
             return ""
 
         # First pass: collect all /set topics to identify status feedback
+        # Also collect action_topic values from announce messages to mark as automated
         set_topics: set = set()
+        auto_action_topics: set = set()
         for line in lines:
             parsed = self._parse_message_line(line)
             if parsed:
-                _, topic, _ = parsed
+                _, topic, payload = parsed
                 if topic.endswith('/set'):
                     # Store the base topic (without /set) to identify status feedback
                     set_topics.add(topic[:-4])  # Remove '/set' suffix
+                # Track action topics from announce messages
+                if topic.startswith("mqtt2ai/action/") and "action_topic" in payload:
+                    action_topic = payload.get("action_topic")
+                    if action_topic:
+                        auto_action_topics.add(action_topic)
 
         # Parse messages and track by topic
         topic_stats: Dict[str, MessageStats] = {}
@@ -306,8 +321,9 @@ Tasks (in order):
 
             # Check if this is the trigger topic - always keep
             if trigger_topic and topic == trigger_topic:
+                short_topic = self._shorten_topic(topic)
                 trigger_messages.append(
-                    f"[{timestamp}] {topic} {self._format_payload(payload)} (TRIGGER)"
+                    f"[{timestamp}] {short_topic} {self._format_payload(payload)} (TRIGGER)"
                 )
                 continue
 
@@ -360,12 +376,23 @@ Tasks (in order):
 
             line = self._format_stats_line(stats)
 
+            # Check if this is an automated action announcement
+            # These messages indicate actions taken by the rule engine or AI
+            is_auto_announce = stats.topic.startswith("mqtt2ai/action/")
+            
+            # Check if this topic was the target of an automated action
+            # (i.e., it appears in an announce message's action_topic)
+            is_auto_action = stats.topic in auto_action_topics
+
             # Check if this is status feedback (topic has a corresponding /set command)
             # Status feedback should NOT be used as triggers for pattern learning
             is_status_feedback = stats.topic in set_topics and not stats.topic.endswith('/set')
 
+            # Mark automated action announcements and their targets with [AUTO] prefix
+            if is_auto_announce or is_auto_action:
+                line = "[AUTO] " + line
             # Annotate messages that have existing rules with PREFIX so AI sees it first
-            if existing_patterns:
+            elif existing_patterns:
                 for trigger_field in stats.payload.keys():
                     # Check if this topic+field has a rule to any action
                     for pattern in existing_patterns:
@@ -377,7 +404,7 @@ Tasks (in order):
                     break
 
             # Mark status feedback messages so AI knows not to use them as triggers
-            if is_status_feedback and "[SKIP-LEARNED]" not in line:
+            if is_status_feedback and "[SKIP-LEARNED]" not in line and "[AUTO]" not in line:
                 line = "[STATUS] " + line
 
             output_lines.append(line)
@@ -443,8 +470,16 @@ Tasks (in order):
         parts = [f"{k}:{json.dumps(v)}" for k, v in payload.items()]
         return " ".join(parts)
 
+    def _shorten_topic(self, topic: str) -> str:
+        """Shorten topic by replacing common prefixes."""
+        for prefix, replacement in self.TOPIC_REPLACEMENTS.items():
+            if topic.startswith(prefix):
+                return replacement + topic[len(prefix):]
+        return topic
+
     def _format_stats_line(self, stats: MessageStats) -> str:
         """Format a MessageStats as a compressed line."""
+        topic = self._shorten_topic(stats.topic)
         payload_str = self._format_payload(stats.payload)
         
         # Add count suffix if > 1
@@ -456,7 +491,7 @@ Tasks (in order):
             if max_val - min_val > 1:  # Only show if meaningful range
                 range_info += f" range:{min_val:.0f}-{max_val:.0f}"
 
-        return f"[{stats.timestamp}] {stats.topic} {payload_str}{count_suffix}{range_info}"
+        return f"[{stats.timestamp}] {topic} {payload_str}{count_suffix}{range_info}"
 
     def _filter_relevant_rules(
         self,

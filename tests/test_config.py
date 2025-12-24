@@ -26,7 +26,7 @@ class TestConfigDefaults:
     def test_default_mqtt_topics(self):
         """Test default MQTT topics value."""
         config = Config()
-        assert config.mqtt_topics == ["zigbee2mqtt/#", "jokes/#"]
+        assert config.mqtt_topics == ["zigbee2mqtt/#", "jokes/#", "mqtt2ai/#"]
 
     def test_default_max_messages(self):
         """Test default max messages value."""

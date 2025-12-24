@@ -279,14 +279,52 @@ OPENAI_TOOLS_MINIMAL = [
 ]
 
 
+def _announce_ai_action(topic: str, payload: str) -> None:
+    """Publish a causation announcement for an AI-initiated MQTT action.
+    
+    This allows pattern learning to know that this action was automated
+    by the AI, not performed manually by a user.
+    """
+    mcp = _get_mcp_tools()
+    
+    announcement = {
+        "source": "ai_analysis",
+        "rule_id": None,
+        "trigger_topic": None,
+        "trigger_field": None,
+        "trigger_value": None,
+        "action_topic": topic,
+        "action_payload": payload,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    # Publish to the announce topic first
+    announce_topic = "mqtt2ai/action/announce"
+    try:
+        mcp.send_mqtt_message(announce_topic, json.dumps(announcement))
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logging.warning("Failed to publish AI action announcement: %s", e)
+
+
 def execute_tool_call(tool_name: str, arguments: dict) -> str:
     """Execute an MCP tool and return the result."""
     mcp = _get_mcp_tools()
     
+    # For send_mqtt_message, publish announcement first
+    if tool_name == "send_mqtt_message":
+        topic = arguments.get("topic", "")
+        payload = arguments.get("payload", "")
+        
+        # Skip announcement for announce topic itself to avoid recursion
+        if not topic.startswith("mqtt2ai/"):
+            _announce_ai_action(topic, payload)
+        
+        try:
+            return mcp.send_mqtt_message(topic, payload)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            return f"Error executing {tool_name}: {e}"
+    
     tool_map = {
-        "send_mqtt_message": lambda args: mcp.send_mqtt_message(
-            args["topic"], args["payload"]
-        ),
         "record_pattern_observation": lambda args: mcp.record_pattern_observation(
             args["trigger_topic"], args["trigger_field"],
             args["action_topic"], args["delay_seconds"]

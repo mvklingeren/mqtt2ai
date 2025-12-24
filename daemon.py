@@ -44,6 +44,134 @@ class AiRequest:
     trigger_result: Optional[TriggerResult] = None
 
 
+class RuleEngine:
+    """Executes learned rules directly without AI for matched triggers.
+    
+    This provides fast, deterministic execution of fixed automation rules
+    while reserving AI for anomaly detection and pattern learning.
+    """
+
+    # Topic for publishing causation announcements
+    ANNOUNCE_TOPIC = "mqtt2ai/action/announce"
+
+    def __init__(self, mqtt_client: 'MqttClient', kb: 'KnowledgeBase'):
+        self.mqtt = mqtt_client
+        self.kb = kb
+
+    def check_and_execute(
+        self,
+        topic: str,
+        payload_str: str,
+        trigger_result: TriggerResult
+    ) -> bool:
+        """Check if any enabled rule matches and execute directly.
+        
+        Args:
+            topic: The MQTT topic that triggered
+            payload_str: The raw payload string (JSON)
+            trigger_result: The TriggerResult from TriggerAnalyzer
+            
+        Returns:
+            True if a rule was executed (handled), False otherwise
+        """
+        if not trigger_result.should_trigger:
+            return False
+
+        # Parse payload
+        try:
+            payload = json.loads(payload_str)
+        except json.JSONDecodeError:
+            return False
+
+        if not isinstance(payload, dict):
+            return False
+
+        # Reload rules to get latest state
+        rules = self.kb.learned_rules.get("rules", [])
+
+        for rule in rules:
+            if not rule.get("enabled", True):
+                continue
+
+            if self._matches(rule, topic, payload, trigger_result):
+                self._announce_and_execute(rule, topic, trigger_result)
+                return True
+
+        return False
+
+    def _matches(
+        self,
+        rule: dict,
+        topic: str,
+        payload: dict,
+        trigger_result: TriggerResult
+    ) -> bool:
+        """Check if a rule matches the current trigger event."""
+        trigger = rule.get("trigger", {})
+        
+        # Check topic match
+        if trigger.get("topic") != topic:
+            return False
+
+        # Check field match
+        rule_field = trigger.get("field")
+        if rule_field != trigger_result.field_name:
+            return False
+
+        # Check value match
+        rule_value = trigger.get("value")
+        actual_value = payload.get(rule_field)
+
+        # Handle type conversion for comparison
+        if rule_value == actual_value:
+            return True
+
+        # Try string comparison for booleans/numbers
+        if str(rule_value).lower() == str(actual_value).lower():
+            return True
+
+        return False
+
+    def _announce_and_execute(
+        self,
+        rule: dict,
+        trigger_topic: str,
+        trigger_result: TriggerResult
+    ):
+        """Publish causation announcement and then execute the rule action."""
+        rule_id = rule.get("id", "unknown")
+        trigger = rule.get("trigger", {})
+        action = rule.get("action", {})
+
+        action_topic = action.get("topic", "")
+        action_payload = action.get("payload", "{}")
+
+        # Build announcement message
+        announcement = {
+            "source": "direct_rule",
+            "rule_id": rule_id,
+            "trigger_topic": trigger_topic,
+            "trigger_field": trigger_result.field_name,
+            "trigger_value": trigger_result.new_value,
+            "action_topic": action_topic,
+            "action_payload": action_payload,
+            "timestamp": datetime.now().isoformat()
+        }
+
+        # Publish announcement first
+        green, reset = "\033[92m", "\033[0m"
+        logging.info(
+            "%s[DIRECT RULE] %s: %s[%s=%s] -> %s%s",
+            green, rule_id, trigger_topic, trigger_result.field_name,
+            trigger_result.new_value, action_topic, reset
+        )
+
+        self.mqtt.publish(self.ANNOUNCE_TOPIC, json.dumps(announcement))
+
+        # Then execute the action
+        self.mqtt.publish(action_topic, action_payload)
+
+
 def setup_logging(config: Config):
     """Configure the logging module."""
     level = logging.DEBUG if config.verbose else logging.INFO
@@ -102,6 +230,9 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             config.filtered_triggers_file,
             simulation_mode=bool(config.simulation_file)
         )
+        
+        # Rule engine for direct execution of learned rules (no AI needed)
+        self.rule_engine = RuleEngine(self.mqtt, self.kb)
 
         self.messages_deque: Deque[str] = collections.deque(maxlen=config.max_messages)
         self.new_message_count = 0
@@ -136,6 +267,17 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         logging.info(
             "  - Numeric fields: %s",
             list(stats['config']['numeric_fields'].keys())
+        )
+        
+        # Log rule engine status
+        rules_count = len(self.kb.learned_rules.get('rules', []))
+        enabled_count = sum(
+            1 for r in self.kb.learned_rules.get('rules', [])
+            if r.get('enabled', True)
+        )
+        logging.info(
+            "Rule engine initialized: %d rules (%d enabled for direct execution)",
+            rules_count, enabled_count
         )
 
         # Start AI worker thread (processes AI requests asynchronously)
@@ -418,9 +560,21 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 is_trigger_line = False
                 if trigger_result.should_trigger:
                     self._print_trigger(trigger_result, line)
-                    with self.lock:
-                        self.last_trigger_result = trigger_result
-                    self.ai_event.set()
+                    
+                    # Try direct rule execution first (fast path, no AI)
+                    # Reload knowledge base to get latest rules
+                    self.kb.load_all()
+                    rule_handled = self.rule_engine.check_and_execute(
+                        current_topic, current_payload, trigger_result
+                    )
+                    
+                    if not rule_handled:
+                        # No rule matched - queue for AI (pattern learning or anomaly)
+                        with self.lock:
+                            self.last_trigger_result = trigger_result
+                        self.ai_event.set()
+                    # If rule_handled, skip AI - the rule was executed directly
+                    
                     is_trigger_line = True
 
                 # Verbose printing for non-trigger lines
@@ -508,15 +662,27 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 is_trigger_line = False
                 if trigger_result.should_trigger:
                     self._print_trigger(trigger_result, line)
-                    with self.lock:
-                        self.last_trigger_result = trigger_result
-                    self.ai_event.set()
-                    is_trigger_line = True
                     
-                    # In simulation mode, wait for AI to finish before continuing
-                    # This ensures deterministic pattern learning
-                    if not self.config.no_ai:
-                        self._wait_for_ai_completion()
+                    # Try direct rule execution first (fast path, no AI)
+                    # Reload knowledge base to get latest rules
+                    self.kb.load_all()
+                    rule_handled = self.rule_engine.check_and_execute(
+                        current_topic, current_payload, trigger_result
+                    )
+                    
+                    if not rule_handled:
+                        # No rule matched - queue for AI (pattern learning or anomaly)
+                        with self.lock:
+                            self.last_trigger_result = trigger_result
+                        self.ai_event.set()
+                        
+                        # In simulation mode, wait for AI to finish before continuing
+                        # This ensures deterministic pattern learning
+                        if not self.config.no_ai:
+                            self._wait_for_ai_completion()
+                    # If rule_handled, skip AI - the rule was executed directly
+                    
+                    is_trigger_line = True
 
                 # Verbose printing for non-trigger lines
                 if should_print and not is_trigger_line and self.config.verbose:
