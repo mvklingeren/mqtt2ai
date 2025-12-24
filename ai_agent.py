@@ -534,7 +534,24 @@ class AiAgent:
                     # Add the assistant's response to messages as a clean dict
                     # Using model_dump(exclude_none=True) removes null fields that may confuse
                     # non-OpenAI providers like Groq with Llama models
-                    messages.append(message.model_dump(exclude_none=True))
+                    # Manually construct the message dictionary to ensure only expected fields are present
+                    # and tool_calls are correctly formatted.
+                    assistant_message_to_add = {"role": message.role}
+                    if message.content:
+                        assistant_message_to_add["content"] = message.content
+                    if message.tool_calls:
+                        assistant_message_to_add["tool_calls"] = [
+                            {
+                                "id": tc.id,
+                                "type": tc.type,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                },
+                            }
+                            for tc in message.tool_calls
+                        ]
+                    messages.append(assistant_message_to_add)
 
                     # Track redundant tool calls for early termination
                     redundant_patterns = [

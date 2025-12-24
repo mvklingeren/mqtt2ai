@@ -28,7 +28,7 @@ This saves tokens and prevents redundant operations.
 
 ### Safety (CRITICAL - ACT IMMEDIATELY)
 - smoke:true → Activate siren, send emergency notification
-- water_leak:true → Activate siren, send emergency notification  
+- water_leak:true → Activate siren, send emergency notification
 - temperature > 50°C → Activate siren, send emergency notification
 
 ### Security (when armed_home or armed_away)
@@ -36,12 +36,17 @@ This saves tokens and prevents redundant operations.
 - Motion detected (occupancy:true) → Activate siren + notification
 
 ### Pattern Learning
-1. Messages prefixed with [SKIP-LEARNED] already have rules - DO NOT call record_pattern_observation for them
-2. Also check SKIP PATTERNS section below - if pattern is listed there, do nothing
-3. Only look for NEW trigger→action sequences (sensor event followed by /set command within 0.5-30s)
-4. Call record_pattern_observation ONLY for patterns NOT prefixed with [SKIP-LEARNED] and NOT in SKIP PATTERNS
-5. After 3+ observations, call create_rule
-6. DO NOT send MQTT messages while learning - only record observations
+1. Messages prefixed with [SKIP-LEARNED] already have rules - DO NOT call record_pattern_observation
+2. Messages prefixed with [STATUS] are device state feedback AFTER a /set command - NEVER use as triggers
+3. Only SENSORS (PIR, door contacts, buttons) can be triggers - NOT device state reports
+4. Valid trigger→action: sensor event (occupancy, contact, button) → /set command within 0.5-30s
+5. INVALID patterns to ignore:
+   - [STATUS] messages → anything (device feedback is NOT a trigger)
+   - topic/set → same topic (circular/self-triggering)
+   - topic → topic/set where topic is the SAME device (status→command loop)
+6. Call record_pattern_observation ONLY for valid sensor→action patterns
+7. After 3+ observations, call create_rule
+8. DO NOT send MQTT messages while learning - only record observations
 
 ### Rule Execution
 - ONLY call send_mqtt_message when an ENABLED rule matches the CURRENT trigger
@@ -260,19 +265,29 @@ Tasks (in order):
         existing_patterns: Optional[set] = None
     ) -> str:
         """Compress MQTT messages with deduplication and counts.
-        
+
         Args:
             messages_snapshot: Raw messages as newline-separated string
             trigger_topic: Topic that triggered analysis (prioritized)
             max_lines: Maximum lines in output
             max_chars: Maximum characters in output
-            
+
         Returns:
             Compressed messages string
         """
         lines = messages_snapshot.strip().split('\n')
         if not lines:
             return ""
+
+        # First pass: collect all /set topics to identify status feedback
+        set_topics: set = set()
+        for line in lines:
+            parsed = self._parse_message_line(line)
+            if parsed:
+                _, topic, _ = parsed
+                if topic.endswith('/set'):
+                    # Store the base topic (without /set) to identify status feedback
+                    set_topics.add(topic[:-4])  # Remove '/set' suffix
 
         # Parse messages and track by topic
         topic_stats: Dict[str, MessageStats] = {}
@@ -344,7 +359,11 @@ Tasks (in order):
                 continue
 
             line = self._format_stats_line(stats)
-            
+
+            # Check if this is status feedback (topic has a corresponding /set command)
+            # Status feedback should NOT be used as triggers for pattern learning
+            is_status_feedback = stats.topic in set_topics and not stats.topic.endswith('/set')
+
             # Annotate messages that have existing rules with PREFIX so AI sees it first
             if existing_patterns:
                 for trigger_field in stats.payload.keys():
@@ -356,7 +375,11 @@ Tasks (in order):
                     else:
                         continue
                     break
-            
+
+            # Mark status feedback messages so AI knows not to use them as triggers
+            if is_status_feedback and "[SKIP-LEARNED]" not in line:
+                line = "[STATUS] " + line
+
             output_lines.append(line)
 
         # Add omitted count if any

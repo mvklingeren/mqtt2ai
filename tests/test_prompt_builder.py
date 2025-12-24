@@ -411,6 +411,392 @@ class TestCompactRulebook:
 
     def test_compact_rulebook_is_concise(self):
         """Test that compact rulebook is reasonably short."""
-        # Should be under 1000 characters for token efficiency
-        assert len(COMPACT_RULEBOOK) < 1000
+        # Should be under 2000 characters for token efficiency
+        assert len(COMPACT_RULEBOOK) < 2000
+
+
+class TestExistingPatternsSet(TestPromptBuilder):
+    """Tests for building and using the existing patterns set."""
+
+    def test_build_existing_patterns_set_empty(self, builder):
+        """Test building patterns set from empty rules."""
+        patterns = builder._build_existing_patterns_set({"rules": []})
+        assert patterns == set()
+
+    def test_build_existing_patterns_set_single_rule(self, builder):
+        """Test building patterns set from single rule."""
+        rules = {
+            "rules": [{
+                "id": "test_rule",
+                "trigger": {
+                    "topic": "zigbee2mqtt/pir",
+                    "field": "occupancy",
+                    "value": True
+                },
+                "action": {
+                    "topic": "zigbee2mqtt/light/set",
+                    "payload": '{"state": "ON"}'
+                }
+            }]
+        }
+        patterns = builder._build_existing_patterns_set(rules)
+
+        assert len(patterns) == 1
+        assert ("zigbee2mqtt/pir", "occupancy", "zigbee2mqtt/light/set") in patterns
+
+    def test_build_existing_patterns_set_multiple_rules(self, builder):
+        """Test building patterns set from multiple rules."""
+        rules = {
+            "rules": [
+                {
+                    "id": "rule1",
+                    "trigger": {"topic": "zigbee2mqtt/pir1", "field": "occupancy"},
+                    "action": {"topic": "zigbee2mqtt/light1/set"}
+                },
+                {
+                    "id": "rule2",
+                    "trigger": {"topic": "zigbee2mqtt/door", "field": "contact"},
+                    "action": {"topic": "zigbee2mqtt/porch/set"}
+                }
+            ]
+        }
+        patterns = builder._build_existing_patterns_set(rules)
+
+        assert len(patterns) == 2
+        assert ("zigbee2mqtt/pir1", "occupancy", "zigbee2mqtt/light1/set") in patterns
+        assert ("zigbee2mqtt/door", "contact", "zigbee2mqtt/porch/set") in patterns
+
+    def test_build_existing_patterns_set_ignores_incomplete(self, builder):
+        """Test that rules with missing fields are ignored."""
+        rules = {
+            "rules": [
+                {
+                    "id": "incomplete",
+                    "trigger": {"topic": "zigbee2mqtt/pir"},  # Missing field
+                    "action": {"topic": "zigbee2mqtt/light/set"}
+                },
+                {
+                    "id": "complete",
+                    "trigger": {"topic": "zigbee2mqtt/door", "field": "contact"},
+                    "action": {"topic": "zigbee2mqtt/porch/set"}
+                }
+            ]
+        }
+        patterns = builder._build_existing_patterns_set(rules)
+
+        assert len(patterns) == 1
+        assert ("zigbee2mqtt/door", "contact", "zigbee2mqtt/porch/set") in patterns
+
+
+class TestSkipLearnedAnnotation(TestPromptBuilder):
+    """Tests for SKIP-LEARNED message annotation."""
+
+    def test_compress_adds_skip_learned_for_existing_patterns(self, builder):
+        """Test that messages matching existing patterns get SKIP-LEARNED prefix."""
+        existing_patterns = {
+            ("zigbee2mqtt/hallway_pir", "occupancy", "zigbee2mqtt/hallway_light/set")
+        }
+        snapshot = '[12:00:01] zigbee2mqtt/hallway_pir {"occupancy":true}'
+
+        compressed = builder._compress_messages(
+            snapshot, None, existing_patterns=existing_patterns
+        )
+
+        assert "[SKIP-LEARNED]" in compressed
+
+    def test_compress_no_skip_learned_for_new_patterns(self, builder):
+        """Test that messages not matching patterns don't get prefix."""
+        existing_patterns = {
+            ("zigbee2mqtt/other_pir", "occupancy", "zigbee2mqtt/other_light/set")
+        }
+        snapshot = '[12:00:01] zigbee2mqtt/hallway_pir {"occupancy":true}'
+
+        compressed = builder._compress_messages(
+            snapshot, None, existing_patterns=existing_patterns
+        )
+
+        assert "[SKIP-LEARNED]" not in compressed
+
+    def test_compress_skip_learned_matches_field(self, builder):
+        """Test that SKIP-LEARNED only applies when trigger field matches."""
+        # Pattern is for 'occupancy' field
+        existing_patterns = {
+            ("zigbee2mqtt/sensor", "occupancy", "zigbee2mqtt/light/set")
+        }
+        # Message has 'temperature' field, not 'occupancy'
+        snapshot = '[12:00:01] zigbee2mqtt/sensor {"temperature":22}'
+
+        compressed = builder._compress_messages(
+            snapshot, None, existing_patterns=existing_patterns
+        )
+
+        assert "[SKIP-LEARNED]" not in compressed
+
+    def test_compress_skip_learned_for_multiple_patterns(self, builder):
+        """Test SKIP-LEARNED with multiple patterns."""
+        existing_patterns = {
+            ("zigbee2mqtt/pir", "occupancy", "zigbee2mqtt/light/set"),
+            ("zigbee2mqtt/door", "contact", "zigbee2mqtt/porch/set"),
+        }
+        snapshot = """[12:00:01] zigbee2mqtt/pir {"occupancy":true}
+[12:00:02] zigbee2mqtt/door {"contact":false}
+[12:00:03] zigbee2mqtt/new_sensor {"motion":true}"""
+
+        compressed = builder._compress_messages(
+            snapshot, None, existing_patterns=existing_patterns
+        )
+
+        # Should have 2 SKIP-LEARNED annotations
+        assert compressed.count("[SKIP-LEARNED]") == 2
+
+
+class TestStatusFeedbackDetection(TestPromptBuilder):
+    """Tests for distinguishing status feedback from actual triggers.
+
+    This tests the scenario where:
+    - User action: /set command sent to device
+    - Status feedback: device reports new state (not a trigger)
+
+    Status feedback messages should NOT be treated as triggers for new patterns.
+    """
+
+    def test_set_command_topics_identified(self, builder):
+        """Test that /set topics are recognized as action topics."""
+        snapshot = """[12:00:01] zigbee2mqtt/hallway_pir {"occupancy":true}
+[12:00:02] zigbee2mqtt/hallway_light/set {"state":"ON"}
+[12:00:03] zigbee2mqtt/hallway_light {"state":"ON","brightness":254}"""
+
+        compressed = builder._compress_messages(snapshot, None)
+
+        # All three messages should be present
+        assert "hallway_pir" in compressed
+        assert "hallway_light/set" in compressed
+        assert "hallway_light" in compressed
+
+    def test_status_feedback_marked_with_status_prefix(self, builder):
+        """Test that status feedback messages get [STATUS] prefix."""
+        snapshot = """[12:00:01] zigbee2mqtt/hallway_light/set {"state":"ON"}
+[12:00:02] zigbee2mqtt/hallway_light {"state":"ON","brightness":254}"""
+
+        compressed = builder._compress_messages(snapshot, None)
+
+        # hallway_light (status feedback) should have [STATUS] prefix
+        assert "[STATUS]" in compressed
+        # The /set command should NOT have [STATUS]
+        lines = compressed.split('\n')
+        for line in lines:
+            if "/set" in line:
+                assert "[STATUS]" not in line
+
+    def test_status_feedback_not_marked_without_set_command(self, builder):
+        """Test that messages are not marked [STATUS] if no /set command exists."""
+        snapshot = """[12:00:01] zigbee2mqtt/hallway_pir {"occupancy":true}
+[12:00:02] zigbee2mqtt/hallway_light {"state":"ON","brightness":254}"""
+
+        compressed = builder._compress_messages(snapshot, None)
+
+        # No /set command, so no [STATUS] prefix
+        assert "[STATUS]" not in compressed
+
+    def test_status_feedback_marked_for_multiple_devices(self, builder):
+        """Test [STATUS] marking works for multiple devices."""
+        snapshot = """[12:00:01] zigbee2mqtt/hallway_light/set {"state":"ON"}
+[12:00:02] zigbee2mqtt/hallway_light {"state":"ON"}
+[12:00:03] zigbee2mqtt/porch_light/set {"state":"ON"}
+[12:00:04] zigbee2mqtt/porch_light {"state":"ON"}"""
+
+        compressed = builder._compress_messages(snapshot, None)
+
+        # Both status feedback messages should have [STATUS]
+        assert compressed.count("[STATUS]") == 2
+
+    def test_sensor_messages_not_marked_as_status(self, builder):
+        """Test that sensor messages (PIR, door) are not marked as status."""
+        snapshot = """[12:00:01] zigbee2mqtt/hallway_pir {"occupancy":true}
+[12:00:02] zigbee2mqtt/front_door {"contact":false}
+[12:00:03] zigbee2mqtt/hallway_light/set {"state":"ON"}
+[12:00:04] zigbee2mqtt/hallway_light {"state":"ON"}"""
+
+        compressed = builder._compress_messages(snapshot, None)
+
+        # Only the light status should have [STATUS], not the sensors
+        assert compressed.count("[STATUS]") == 1
+        # Verify sensors don't have [STATUS]
+        lines = compressed.split('\n')
+        for line in lines:
+            if "hallway_pir" in line or "front_door" in line:
+                assert "[STATUS]" not in line
+
+    def test_trigger_topic_excluded_from_dedup(self, builder):
+        """Test that trigger topic is kept separate and not deduplicated."""
+        snapshot = """[12:00:01] zigbee2mqtt/hallway_pir {"occupancy":true}
+[12:00:02] zigbee2mqtt/hallway_pir {"occupancy":true}
+[12:00:03] zigbee2mqtt/hallway_pir {"occupancy":false}"""
+
+        # When hallway_pir is the trigger, all its messages should be kept
+        compressed = builder._compress_messages(
+            snapshot, trigger_topic="zigbee2mqtt/hallway_pir"
+        )
+
+        # Trigger messages should all have (TRIGGER) marker
+        assert compressed.count("(TRIGGER)") >= 1
+
+    def test_skip_patterns_section_in_prompt(self, builder, mock_kb):
+        """Test that SKIP PATTERNS section is included in prompt."""
+        prompt = builder.build("", mock_kb)
+
+        assert "SKIP PATTERNS" in prompt
+
+    def test_skip_patterns_includes_all_rules(self, builder):
+        """Test that SKIP PATTERNS section includes both enabled and disabled rules."""
+        enabled_rules = [
+            {
+                "id": "enabled",
+                "trigger": {"topic": "zigbee2mqtt/pir", "field": "occupancy"},
+                "action": {"topic": "zigbee2mqtt/light/set"},
+                "enabled": True
+            }
+        ]
+        all_rules = [
+            {
+                "id": "enabled",
+                "trigger": {"topic": "zigbee2mqtt/pir", "field": "occupancy"},
+                "action": {"topic": "zigbee2mqtt/light/set"},
+                "enabled": True
+            },
+            {
+                "id": "disabled",
+                "trigger": {"topic": "zigbee2mqtt/door", "field": "contact"},
+                "action": {"topic": "zigbee2mqtt/porch/set"},
+                "enabled": False
+            }
+        ]
+
+        rules_section = builder._format_rules(enabled_rules, None, all_rules)
+
+        # Both patterns should be in SKIP PATTERNS
+        assert "zigbee2mqtt/pir[occupancy]" in rules_section
+        assert "zigbee2mqtt/door[contact]" in rules_section
+
+
+class TestPatternLearningScenarios(TestPromptBuilder):
+    """Tests for realistic pattern learning scenarios from simulation."""
+
+    def test_pir_to_light_pattern_sequence(self, builder):
+        """Test the hallway PIR -> light pattern learning sequence."""
+        # Simulates: PIR triggers -> user turns on light -> light reports state
+        snapshot = """[12:00:01] zigbee2mqtt/hallway_pir {"occupancy":true,"battery":85}
+[12:00:02] zigbee2mqtt/hallway_light/set {"state":"ON"}
+[12:00:02] zigbee2mqtt/hallway_light {"state":"ON","brightness":254}"""
+
+        # After pattern is learned, the trigger should be marked
+        existing_patterns = {
+            ("zigbee2mqtt/hallway_pir", "occupancy", "zigbee2mqtt/hallway_light/set")
+        }
+
+        compressed = builder._compress_messages(
+            snapshot, None, existing_patterns=existing_patterns
+        )
+
+        # PIR message should have SKIP-LEARNED since pattern exists
+        assert "[SKIP-LEARNED]" in compressed
+        # Status feedback (hallway_light without /set) should have [STATUS]
+        lines = compressed.split('\n')
+        for line in lines:
+            if "hallway_light " in line and "/set" not in line:
+                assert "[STATUS]" in line
+                assert "[SKIP-LEARNED]" not in line
+
+    def test_pir_to_light_status_feedback_marked(self, builder):
+        """Test that status feedback is properly marked in PIR->light scenario."""
+        snapshot = """[12:00:01] zigbee2mqtt/hallway_pir {"occupancy":true}
+[12:00:02] zigbee2mqtt/hallway_light/set {"state":"ON"}
+[12:00:03] zigbee2mqtt/hallway_light {"state":"ON","brightness":254}"""
+
+        compressed = builder._compress_messages(snapshot, None)
+
+        # Status feedback should have [STATUS] prefix
+        assert "[STATUS]" in compressed
+        # PIR should NOT have [STATUS] (it's a sensor, not status feedback)
+        lines = compressed.split('\n')
+        for line in lines:
+            if "hallway_pir" in line:
+                assert "[STATUS]" not in line
+
+    def test_door_to_porch_light_pattern(self, builder):
+        """Test door contact -> porch light pattern."""
+        existing_patterns = {
+            ("zigbee2mqtt/front_door", "contact", "zigbee2mqtt/porch_light/set")
+        }
+        snapshot = """[12:00:01] zigbee2mqtt/front_door {"contact":false,"battery":95}
+[12:00:02] zigbee2mqtt/porch_light/set {"state":"ON"}
+[12:00:02] zigbee2mqtt/porch_light {"state":"ON","brightness":200}"""
+
+        compressed = builder._compress_messages(
+            snapshot, None, existing_patterns=existing_patterns
+        )
+
+        # Door message should have SKIP-LEARNED
+        assert "[SKIP-LEARNED]" in compressed
+        assert "front_door" in compressed
+        # Porch light status should have [STATUS]
+        lines = compressed.split('\n')
+        for line in lines:
+            if "porch_light " in line and "/set" not in line:
+                assert "[STATUS]" in line
+
+    def test_status_feedback_not_marked_as_skip_learned(self, builder):
+        """Test that status feedback messages are not incorrectly marked.
+
+        This is the core issue: zigbee2mqtt/hallway_light (status) should NOT
+        be marked as SKIP-LEARNED just because there's a pattern for hallway_pir.
+        """
+        # Pattern: PIR -> light/set
+        existing_patterns = {
+            ("zigbee2mqtt/hallway_pir", "occupancy", "zigbee2mqtt/hallway_light/set")
+        }
+        # Status feedback message (NOT a trigger) - but no /set in this snapshot
+        snapshot = '[12:00:01] zigbee2mqtt/hallway_light {"state":"ON","brightness":254}'
+
+        compressed = builder._compress_messages(
+            snapshot, None, existing_patterns=existing_patterns
+        )
+
+        # Status feedback should NOT have SKIP-LEARNED
+        # The pattern is for hallway_pir, not hallway_light
+        assert "[SKIP-LEARNED]" not in compressed
+
+    def test_full_scenario_with_all_markers(self, builder):
+        """Test a full realistic scenario with SKIP-LEARNED and STATUS markers."""
+        existing_patterns = {
+            ("zigbee2mqtt/hallway_pir", "occupancy", "zigbee2mqtt/hallway_light/set")
+        }
+        snapshot = """[12:00:01] zigbee2mqtt/hallway_pir {"occupancy":true}
+[12:00:02] zigbee2mqtt/hallway_light/set {"state":"ON"}
+[12:00:02] zigbee2mqtt/hallway_light {"state":"ON","brightness":254}
+[12:00:10] zigbee2mqtt/kitchen_pir {"motion":true}
+[12:00:11] zigbee2mqtt/kitchen_light/set {"state":"ON"}
+[12:00:11] zigbee2mqtt/kitchen_light {"state":"ON"}"""
+
+        compressed = builder._compress_messages(
+            snapshot, None, existing_patterns=existing_patterns
+        )
+
+        # hallway_pir should have SKIP-LEARNED (existing pattern)
+        # hallway_light and kitchen_light should have STATUS (feedback after /set)
+        # kitchen_pir should have neither (new potential trigger)
+        lines = compressed.split('\n')
+
+        for line in lines:
+            if "hallway_pir" in line:
+                assert "[SKIP-LEARNED]" in line
+                assert "[STATUS]" not in line
+            elif "hallway_light " in line and "/set" not in line:
+                assert "[STATUS]" in line
+                assert "[SKIP-LEARNED]" not in line
+            elif "kitchen_light " in line and "/set" not in line:
+                assert "[STATUS]" in line
+            elif "kitchen_pir" in line:
+                assert "[STATUS]" not in line
+                assert "[SKIP-LEARNED]" not in line
 
