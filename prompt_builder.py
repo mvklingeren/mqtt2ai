@@ -134,10 +134,9 @@ class PromptBuilder:
         # Build set of existing rule patterns for message annotation
         existing_patterns = self._build_existing_patterns_set(kb.learned_rules)
         
-        # More aggressive compression for compact mode with annotations
+        # Compress messages with annotations
         compressed_messages = self._compress_messages(
-            messages_snapshot, trigger_topic, max_lines=50, max_chars=4000,
-            existing_patterns=existing_patterns
+            messages_snapshot, trigger_topic, existing_patterns=existing_patterns
         )
 
         # Build minimal prompt
@@ -224,8 +223,6 @@ Tasks (in order):
         self,
         messages_snapshot: str,
         trigger_topic: Optional[str],
-        max_lines: int = 100,
-        max_chars: int = 8000,
         existing_patterns: Optional[set] = None
     ) -> str:
         """Compress MQTT messages with deduplication and counts.
@@ -233,8 +230,7 @@ Tasks (in order):
         Args:
             messages_snapshot: Raw messages as newline-separated string
             trigger_topic: Topic that triggered analysis (prioritized)
-            max_lines: Maximum lines in output
-            max_chars: Maximum characters in output
+            existing_patterns: Set of existing rule patterns for annotation
 
         Returns:
             Compressed messages string
@@ -263,7 +259,6 @@ Tasks (in order):
         # Parse messages and track by topic
         topic_stats: Dict[str, MessageStats] = {}
         trigger_messages: List[str] = []
-        omitted_count = 0
 
         for line in lines:
             if not line.strip():
@@ -326,10 +321,6 @@ Tasks (in order):
         )
 
         for stats in sorted_stats:
-            if len(output_lines) >= max_lines:
-                omitted_count += 1
-                continue
-
             line = self._format_stats_line(stats)
 
             # Check if this is an automated action announcement
@@ -365,17 +356,7 @@ Tasks (in order):
 
             output_lines.append(line)
 
-        # Add omitted count if any
-        if omitted_count > 0:
-            output_lines.append(f"--- {omitted_count} topics omitted ---")
-
-        result = '\n'.join(output_lines)
-        
-        # Truncate to max chars if needed
-        if len(result) > max_chars:
-            result = result[:max_chars] + "\n... (truncated)"
-
-        return result
+        return '\n'.join(output_lines)
 
     def _parse_message_line(
         self, line: str
@@ -626,6 +607,11 @@ Tasks (in order):
     def _build_demo_instruction(self) -> str:
         """Build demo mode instruction."""
         if self.config.demo_mode:
-            return "**Demo mode ENABLED - send a joke to jokes/ topic.** "
+            return (
+                "**🎭 DEMO MODE ENABLED**\n"
+                "Your ONLY task: Send ONE joke to the `jokes/` topic using send_mqtt_message, then STOP.\n"
+                "DO NOT: record patterns, create rules, analyze messages, or make any other tool calls.\n"
+                "After sending the joke, your response is complete.\n\n"
+            )
         return ""
 

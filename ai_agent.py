@@ -555,6 +555,10 @@ class AiAgent:
             is_groq = "groq.com" in self.config.openai_api_base
             tools_to_use = OPENAI_TOOLS_MINIMAL if (is_ollama or is_groq) else OPENAI_TOOLS
 
+            # Demo mode: only expose send_mqtt_message tool
+            if self.config.demo_mode:
+                tools_to_use = [t for t in tools_to_use if t["function"]["name"] == "send_mqtt_message"]
+
             # Get model for this request (round-robin across configured models)
             current_model = self.config.get_next_model()
 
