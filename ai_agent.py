@@ -729,6 +729,27 @@ class AiAgent:
                         )
                         break
 
+                    # Demo mode: stop after first send_mqtt_message (task complete)
+                    if self.config.demo_mode:
+                        for tool_call in message.tool_calls:
+                            if tool_call.function.name == "send_mqtt_message":
+                                logging.info(
+                                    "%s[Demo Mode] Message sent, task complete%s",
+                                    orange_bold, reset
+                                )
+                                # Log totals and exit
+                                logging.info(
+                                    "%s[AI Total] %d iterations (demo) | %d prompt + %d completion = %d tokens%s",
+                                    orange_bold, iteration + 1, total_prompt_tokens,
+                                    total_completion_tokens,
+                                    total_prompt_tokens + total_completion_tokens, reset
+                                )
+                                # Force exit from while loop
+                                iteration = max_iterations
+                                break
+                        if iteration >= max_iterations:
+                            break
+
                     # After first iteration, compress the original prompt to save tokens
                     # The AI has already analyzed the MQTT data and made decisions
                     if iteration == 0 and len(messages) > 2:
