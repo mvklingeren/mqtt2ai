@@ -1,46 +1,256 @@
 {
   "rules": [
     {
-      "id": "pir_test_light_on",
+      "id": "hallway_pir_to_light",
       "trigger": {
-        "topic": "zigbee2mqtt/test_pir",
+        "topic": "zigbee2mqtt/hallway_pir",
         "field": "occupancy",
         "value": true
       },
       "action": {
-        "topic": "zigbee2mqtt/test_light/set",
+        "topic": "zigbee2mqtt/hallway_light/set",
         "payload": "{\"state\": \"ON\"}"
       },
       "timing": {
-        "avg_delay_seconds": 2.5,
-        "tolerance_seconds": 1.0
+        "avg_delay_seconds": 1,
+        "tolerance_seconds": 2
       },
       "confidence": {
-        "occurrences": 9,
-        "last_triggered": "2025-12-19T13:28:15.795874"
+        "occurrences": 11,
+        "last_triggered": "2025-12-23T22:11:44.064420"
       },
-      "enabled": true
+      "enabled": false
     },
     {
-      "id": "multisensor_test_light_on",
+      "id": "front_door_to_porch_light",
       "trigger": {
-        "topic": "homie/homey/multisensor-6",
-        "field": "alarm-motion",
+        "topic": "zigbee2mqtt/front_door",
+        "field": "contact",
         "value": true
       },
       "action": {
-        "topic": "zigbee2mqtt/test_light/set",
+        "topic": "zigbee2mqtt/porch_light/set",
         "payload": "{\"state\": \"ON\"}"
       },
       "timing": {
-        "avg_delay_seconds": 16.0,
-        "tolerance_seconds": 1.0
+        "avg_delay_seconds": 7,
+        "tolerance_seconds": 2
+      },
+      "confidence": {
+        "occurrences": 7,
+        "last_triggered": "2025-12-23T22:11:44.066128"
+      },
+      "enabled": false
+    },
+    {
+      "id": "kitchen_pir_to_light_v2",
+      "trigger": {
+        "topic": "zigbee2mqtt/kitchen_pir",
+        "field": "presence",
+        "value": true
+      },
+      "action": {
+        "topic": "zigbee2mqtt/kitchen_light/set",
+        "payload": "{\"state\": \"ON\"}"
+      },
+      "timing": {
+        "avg_delay_seconds": 5,
+        "tolerance_seconds": 3
+      },
+      "confidence": {
+        "occurrences": 5,
+        "last_triggered": "2025-12-23T22:11:58.923982"
+      },
+      "enabled": false
+    },
+    {
+      "id": "living_room_pir_to_light",
+      "trigger": {
+        "topic": "zigbee2mqtt/living_room_pir",
+        "field": "motion",
+        "value": true
+      },
+      "action": {
+        "topic": "zigbee2mqtt/living_room_light/set",
+        "payload": "{\"state\": \"ON\"}"
+      },
+      "timing": {
+        "avg_delay_seconds": 1,
+        "tolerance_seconds": 2
       },
       "confidence": {
         "occurrences": 3,
-        "last_triggered": "2025-12-20T07:43:21.750618"
+        "last_triggered": "2025-12-23T22:11:01.992869"
       },
-      "enabled": true
+      "enabled": false
+    },
+    {
+      "id": "back_door_to_kitchen_light",
+      "trigger": {
+        "topic": "zigbee2mqtt/back_door",
+        "field": "contact",
+        "value": true
+      },
+      "action": {
+        "topic": "zigbee2mqtt/kitchen_light/set",
+        "payload": "{\"state\": \"ON\"}"
+      },
+      "timing": {
+        "avg_delay_seconds": 1,
+        "tolerance_seconds": 2
+      },
+      "confidence": {
+        "occurrences": 3,
+        "last_triggered": "2025-12-23T22:11:09.871427"
+      },
+      "enabled": false
+    },
+    {
+      "id": "thermostat_to_fan",
+      "trigger": {
+        "topic": "zigbee2mqtt/thermostat",
+        "field": "temperature",
+        "value": 78
+      },
+      "action": {
+        "topic": "zigbee2mqtt/fan/set",
+        "payload": "{\"state\": \"ON\"}"
+      },
+      "timing": {
+        "avg_delay_seconds": 10,
+        "tolerance_seconds": 5
+      },
+      "confidence": {
+        "occurrences": 4,
+        "last_triggered": "2025-12-23T22:12:08.912471"
+      },
+      "enabled": false
+    },
+    {
+      "id": "hallway_pir_to_light_2",
+      "trigger": {
+        "topic": "zigbee2mqtt/hallway_pir",
+        "field": "occupancy",
+        "value": true
+      },
+      "action": {
+        "topic": "zigbee2mqtt/hallway_light_2/set",
+        "payload": "{\"state\": \"ON\"}"
+      },
+      "timing": {
+        "avg_delay_seconds": 8,
+        "tolerance_seconds": 2
+      },
+      "confidence": {
+        "occurrences": 3,
+        "last_triggered": "2025-12-23T22:11:24.003140"
+      },
+      "enabled": false
+    },
+    {
+      "id": "hallway_illuminance_to_light",
+      "trigger": {
+        "topic": "zigbee2mqtt/hallway_illuminance",
+        "field": "brightness",
+        "value": 100
+      },
+      "action": {
+        "topic": "zigbee2mqtt/hallway_light/set",
+        "payload": "{\"state\": \"ON\"}"
+      },
+      "timing": {
+        "avg_delay_seconds": 3,
+        "tolerance_seconds": 1
+      },
+      "confidence": {
+        "occurrences": 3,
+        "last_triggered": "2025-12-23T22:11:45.814670"
+      },
+      "enabled": false
+    },
+    {
+      "id": "kitchen_pir_to_light",
+      "trigger": {
+        "topic": "zigbee2mqtt/kitchen_pir",
+        "field": "motion",
+        "value": true
+      },
+      "action": {
+        "topic": "zigbee2mqtt/kitchen_light/set",
+        "payload": "{\"state\": \"ON\"}"
+      },
+      "timing": {
+        "avg_delay_seconds": 3,
+        "tolerance_seconds": 2
+      },
+      "confidence": {
+        "occurrences": 3,
+        "last_triggered": "2025-12-23T22:12:07.424776"
+      },
+      "enabled": false
+    },
+    {
+      "id": "garage_door_to_light",
+      "trigger": {
+        "topic": "zigbee2mqtt/garage_door",
+        "field": "contact",
+        "value": true
+      },
+      "action": {
+        "topic": "zigbee2mqtt/garage_light/set",
+        "payload": "{\"state\": \"ON\"}"
+      },
+      "timing": {
+        "avg_delay_seconds": 2,
+        "tolerance_seconds": 1
+      },
+      "confidence": {
+        "occurrences": 3,
+        "last_triggered": "2025-12-23T22:12:11.517381"
+      },
+      "enabled": false
+    },
+    {
+      "id": "bedroom_pir_to_light",
+      "trigger": {
+        "topic": "zigbee2mqtt/bedroom_pir",
+        "field": "presence",
+        "value": true
+      },
+      "action": {
+        "topic": "zigbee2mqtt/bedroom_light/set",
+        "payload": "{\"state\": \"ON\"}"
+      },
+      "timing": {
+        "avg_delay_seconds": 19,
+        "tolerance_seconds": 1
+      },
+      "confidence": {
+        "occurrences": 3,
+        "last_triggered": "2025-12-23T22:12:25.503076"
+      },
+      "enabled": false
+    },
+    {
+      "id": "basement_pir_to_light",
+      "trigger": {
+        "topic": "zigbee2mqtt/basement_pir",
+        "field": "motion",
+        "value": true
+      },
+      "action": {
+        "topic": "zigbee2mqtt/basement_light/set",
+        "payload": "{\"state\": \"ON\"}"
+      },
+      "timing": {
+        "avg_delay_seconds": 8.333333333333334,
+        "tolerance_seconds": 1
+      },
+      "confidence": {
+        "occurrences": 3,
+        "last_triggered": "2025-12-23T22:12:30.885219"
+      },
+      "enabled": false
     }
   ]
 }

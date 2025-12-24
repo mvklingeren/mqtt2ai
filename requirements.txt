@@ -3,8 +3,11 @@
 # MCP (Model Context Protocol) server for AI tool integration
 mcp>=1.0.0
 
-# OpenAI SDK for OpenAI-compatible APIs (Ollama, LM Studio, etc.)
+# OpenAI SDK for OpenAI-compatible APIs (Groq, Ollama, LM Studio, etc.)
 openai>=1.0.0
+
+# Environment variable management
+python-dotenv>=1.0.0
 
 # Testing
 pytest>=7.4.0

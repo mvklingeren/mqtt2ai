@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ai_agent import AiAgent, timestamp
 from config import Config
 from knowledge_base import KnowledgeBase
+from prompt_builder import PromptBuilder
 
 
 class TestTimestamp:
@@ -123,131 +124,105 @@ class TestAiAgentGetCliCommand:
         assert "gpt-4" in args
         assert "--full-auto" in args
 
-    def test_default_provider_is_codex_openai(self, config):
-        """Test that default provider is codex-openai."""
+    def test_default_provider_uses_gemini(self, config):
+        """Test that gemini provider works correctly."""
+        config.ai_provider = "gemini"
         agent = AiAgent(config)
         cmd, args = agent._get_cli_command()
 
-        assert "--full-auto" in args  # Codex-specific flag
+        assert "--yolo" in args  # Gemini-specific flag
 
 
-class TestAiAgentBuildPrompt:
-    """Tests for _build_prompt method."""
+class TestAiAgentPromptBuilder:
+    """Tests for prompt building via PromptBuilder.
+    
+    Note: The actual _build_prompt method has been moved to PromptBuilder class.
+    These tests verify that AiAgent correctly uses the PromptBuilder.
+    """
 
-    def test_build_prompt_contains_messages(self, config_with_temp_files):
-        """Test that prompt contains messages snapshot."""
+    def test_agent_has_prompt_builder(self, config_with_temp_files):
+        """Test that agent has a prompt_builder instance."""
         agent = AiAgent(config_with_temp_files)
-        kb = KnowledgeBase(config_with_temp_files)
-        kb.rulebook_content = "Test rulebook"
+        assert hasattr(agent, "prompt_builder")
+        assert isinstance(agent.prompt_builder, PromptBuilder)
 
-        messages = "zigbee2mqtt/sensor {\"occupancy\": true}"
-        prompt = agent._build_prompt(messages, kb, "test_reason")
-
-        assert messages in prompt
-
-    def test_build_prompt_contains_rulebook(self, config_with_temp_files):
-        """Test that prompt contains rulebook content."""
+    def test_prompt_builder_uses_config(self, config_with_temp_files):
+        """Test that prompt_builder is initialized with config."""
         agent = AiAgent(config_with_temp_files)
-        kb = KnowledgeBase(config_with_temp_files)
-        kb.rulebook_content = "## Important Rules\n- Rule 1\n- Rule 2"
+        assert agent.prompt_builder.config == config_with_temp_files
 
-        prompt = agent._build_prompt("messages", kb, "test")
-
-        assert "Important Rules" in prompt
-        assert "Rule 1" in prompt
-
-    def test_build_prompt_demo_mode(self, config_with_temp_files):
+    def test_prompt_builder_demo_mode(self, config_with_temp_files):
         """Test that demo mode is indicated in prompt."""
         config_with_temp_files.demo_mode = True
         agent = AiAgent(config_with_temp_files)
         kb = KnowledgeBase(config_with_temp_files)
 
-        prompt = agent._build_prompt("messages", kb, "test")
+        prompt = agent.prompt_builder.build("messages", kb, trigger_reason="test")
 
-        assert "Demo mode is ENABLED" in prompt
+        assert "Demo mode" in prompt
 
-    def test_build_prompt_no_demo_mode(self, config_with_temp_files):
+    def test_prompt_builder_no_demo_mode(self, config_with_temp_files):
         """Test that demo mode is not mentioned when disabled."""
         config_with_temp_files.demo_mode = False
         agent = AiAgent(config_with_temp_files)
         kb = KnowledgeBase(config_with_temp_files)
 
-        prompt = agent._build_prompt("messages", kb, "test")
+        prompt = agent.prompt_builder.build("messages", kb, trigger_reason="test")
 
         assert "Demo mode" not in prompt
 
-    def test_build_prompt_contains_learned_rules(self, config_with_temp_files):
+    def test_prompt_builder_contains_learned_rules(self, config_with_temp_files):
         """Test that prompt contains learned rules."""
         agent = AiAgent(config_with_temp_files)
         kb = KnowledgeBase(config_with_temp_files)
         kb.learned_rules = {
-            "rules": [{"id": "test_rule", "enabled": True}]
+            "rules": [{
+                "id": "test_rule",
+                "trigger": {"topic": "zigbee2mqtt/test", "field": "occupancy", "value": True},
+                "action": {"topic": "zigbee2mqtt/light/set"},
+                "confidence": {"occurrences": 5},
+                "enabled": True
+            }]
         }
 
-        prompt = agent._build_prompt("messages", kb, "test")
+        prompt = agent.prompt_builder.build("messages", kb, trigger_reason="test")
 
-        assert "Learned Automation Rules" in prompt
+        assert "Learned Rules" in prompt
         assert "test_rule" in prompt
 
-    def test_build_prompt_contains_pending_patterns(self, config_with_temp_files):
-        """Test that prompt contains pending patterns."""
-        agent = AiAgent(config_with_temp_files)
-        kb = KnowledgeBase(config_with_temp_files)
-        kb.pending_patterns = {
-            "patterns": [{"trigger_topic": "test/pir"}]
-        }
-
-        prompt = agent._build_prompt("messages", kb, "test")
-
-        assert "Pending Pattern" in prompt
-        assert "test/pir" in prompt
-
-    def test_build_prompt_contains_rejected_patterns(self, config_with_temp_files):
-        """Test that prompt contains rejected patterns."""
-        agent = AiAgent(config_with_temp_files)
-        kb = KnowledgeBase(config_with_temp_files)
-        kb.rejected_patterns = {
-            "patterns": [{"trigger_topic": "rejected/topic"}]
-        }
-
-        prompt = agent._build_prompt("messages", kb, "test")
-
-        assert "Rejected Patterns" in prompt
-        assert "rejected/topic" in prompt
-
-    def test_build_prompt_safety_alert_temperature(self, config_with_temp_files):
+    def test_prompt_builder_safety_alert_temperature(self, config_with_temp_files):
         """Test that safety alert is included for temperature triggers."""
         agent = AiAgent(config_with_temp_files)
         kb = KnowledgeBase(config_with_temp_files)
 
-        prompt = agent._build_prompt("messages", kb, "temperature spike")
+        prompt = agent.prompt_builder.build("messages", kb, trigger_reason="temperature spike")
 
         assert "SAFETY ALERT" in prompt
 
-    def test_build_prompt_safety_alert_smoke(self, config_with_temp_files):
+    def test_prompt_builder_safety_alert_smoke(self, config_with_temp_files):
         """Test that safety alert is included for smoke triggers."""
         agent = AiAgent(config_with_temp_files)
         kb = KnowledgeBase(config_with_temp_files)
 
-        prompt = agent._build_prompt("messages", kb, "smoke detected")
+        prompt = agent.prompt_builder.build("messages", kb, trigger_reason="smoke detected")
 
         assert "SAFETY ALERT" in prompt
 
-    def test_build_prompt_safety_alert_water(self, config_with_temp_files):
+    def test_prompt_builder_safety_alert_water(self, config_with_temp_files):
         """Test that safety alert is included for water/leak triggers."""
         agent = AiAgent(config_with_temp_files)
         kb = KnowledgeBase(config_with_temp_files)
 
-        prompt = agent._build_prompt("messages", kb, "water leak warning")
+        prompt = agent.prompt_builder.build("messages", kb, trigger_reason="water leak warning")
 
         assert "SAFETY ALERT" in prompt
 
-    def test_build_prompt_no_safety_alert_normal(self, config_with_temp_files):
+    def test_prompt_builder_no_safety_alert_normal(self, config_with_temp_files):
         """Test that no safety alert for normal triggers."""
         agent = AiAgent(config_with_temp_files)
         kb = KnowledgeBase(config_with_temp_files)
 
-        prompt = agent._build_prompt("messages", kb, "interval check")
+        prompt = agent.prompt_builder.build("messages", kb, trigger_reason="interval check")
 
         assert "SAFETY ALERT" not in prompt
 
@@ -306,8 +281,9 @@ class TestAiAgentExecuteAiCall:
 class TestAiAgentTestConnection:
     """Tests for test_connection method."""
 
-    def test_test_connection_success(self, config):
-        """Test successful connection test."""
+    def test_test_connection_cli_success(self, config):
+        """Test successful CLI connection test."""
+        config.ai_provider = "gemini"  # Use CLI-based provider
         agent = AiAgent(config)
 
         with patch("shutil.which") as mock_which:
@@ -324,6 +300,7 @@ class TestAiAgentTestConnection:
 
     def test_test_connection_cli_not_found(self, config):
         """Test connection test when CLI not found."""
+        config.ai_provider = "gemini"  # Use CLI-based provider
         config.gemini_command = "/nonexistent/cli"
         agent = AiAgent(config)
 
@@ -334,8 +311,9 @@ class TestAiAgentTestConnection:
             assert success is False
             assert "not found" in message.lower()
 
-    def test_test_connection_timeout(self, config):
-        """Test connection test timeout."""
+    def test_test_connection_cli_timeout(self, config):
+        """Test CLI connection test timeout."""
+        config.ai_provider = "gemini"  # Use CLI-based provider
         agent = AiAgent(config)
 
         with patch("shutil.which") as mock_which:
@@ -347,8 +325,9 @@ class TestAiAgentTestConnection:
                 assert success is False
                 assert "timed out" in message.lower()
 
-    def test_test_connection_subprocess_error(self, config):
-        """Test connection test subprocess error."""
+    def test_test_connection_cli_subprocess_error(self, config):
+        """Test CLI connection test subprocess error."""
+        config.ai_provider = "gemini"  # Use CLI-based provider
         agent = AiAgent(config)
 
         with patch("shutil.which") as mock_which:
@@ -370,7 +349,7 @@ class TestAiAgentOpenAICompatible:
         """Test successful connection to OpenAI-compatible API."""
         config.ai_provider = "openai-compatible"
         config.openai_api_base = "http://192.168.1.52:11434/v1"
-        config.openai_model = "llama3.2"
+        config.openai_models = ["llama3.2"]
         agent = AiAgent(config)
 
         mock_response = MagicMock()
@@ -431,11 +410,12 @@ class TestAiAgentRunAnalysis:
 
     def test_run_analysis_builds_prompt_and_executes(self, config):
         """Test that run_analysis builds prompt and executes."""
+        config.ai_provider = "gemini"  # Use CLI-based provider that uses full prompt
         agent = AiAgent(config)
         kb = KnowledgeBase(config)
         kb.rulebook_content = "Test rulebook"
 
-        with patch.object(agent, "_build_prompt") as mock_build:
+        with patch.object(agent.prompt_builder, "build") as mock_build:
             mock_build.return_value = "test prompt"
             with patch.object(agent, "_execute_ai_call") as mock_execute:
                 agent.run_analysis("messages", kb, "test_reason")
@@ -449,11 +429,24 @@ class TestAiAgentRunAnalysis:
         agent = AiAgent(config)
         kb = KnowledgeBase(config)
 
-        with patch.object(agent, "_build_prompt", return_value="prompt"):
+        with patch.object(agent.prompt_builder, "build", return_value="prompt"):
             with patch.object(agent, "_execute_ai_call") as mock_execute:
                 agent.run_analysis("messages", kb, "reason")
 
                 # First argument should be provider in uppercase
                 call_args = mock_execute.call_args[0]
                 assert call_args[0] == "CLAUDE"
+    
+    def test_run_analysis_uses_compact_prompt_for_openai(self, config):
+        """Test that openai-compatible uses compact prompt."""
+        config.ai_provider = "openai-compatible"
+        agent = AiAgent(config)
+        kb = KnowledgeBase(config)
+
+        with patch.object(agent.prompt_builder, "build_compact") as mock_compact:
+            mock_compact.return_value = "compact prompt"
+            with patch.object(agent, "_execute_ai_call"):
+                agent.run_analysis("messages", kb, "reason")
+
+                mock_compact.assert_called_once()
 

@@ -1,205 +1,108 @@
 {
   "patterns": [
     {
-      "trigger_topic": "ring/8bca0aef-8bda-441b-9fa9-cbd8e940c142/camera/54e019c6cb9b/motion",
-      "trigger_field": "occupancy",
-      "action_topic": "zigbee2mqtt/0x0017880108cee31c/set",
+      "trigger_topic": "zigbee2mqtt/living_room_thermostat",
+      "trigger_field": "temperature",
+      "action_topic": "zigbee2mqtt/living_room_fan/set",
       "observations": [
         {
-          "delay_seconds": 2.0,
-          "timestamp": "2025-12-19T19:48:12.182539"
-        }
-      ]
-    },
-    {
-      "trigger_topic": "zigbee2mqtt/test_pir",
-      "trigger_field": "occupancy",
-      "action_topic": "zigbee2mqtt/test_light/set",
-      "observations": [
-        {
-          "delay_seconds": 5.0,
-          "timestamp": "2025-12-20T07:33:54.950321"
-        }
-      ]
-    },
-    {
-      "trigger_topic": "homie/homey/multisensor-6/alarm-motion",
-      "trigger_field": "alarm-motion",
-      "action_topic": "zigbee2mqtt/test_light/set",
-      "observations": [
-        {
-          "delay_seconds": 16.0,
-          "timestamp": "2025-12-20T07:36:55.842157"
+          "delay_seconds": 0,
+          "timestamp": "2025-12-23T22:10:24.048388"
         },
         {
-          "delay_seconds": 16.0,
-          "timestamp": "2025-12-20T07:41:37.126776"
+          "delay_seconds": 0,
+          "timestamp": "2025-12-23T22:10:24.391457"
         }
       ]
     },
     {
-      "trigger_topic": "zigbee2mqtt/0xbc33acfffe870a61",
-      "trigger_field": "occupancy",
-      "action_topic": "zigbee2mqtt/test_light/set",
+      "trigger_topic": "zigbee2mqtt/living_room_pir",
+      "trigger_field": "illumination",
+      "action_topic": "zigbee2mqtt/living_room_light/set",
       "observations": [
         {
-          "delay_seconds": 6.0,
-          "timestamp": "2025-12-20T08:06:00.983004"
-        }
-      ]
-    },
-    {
-      "trigger_topic": "ring/8bca0aef-8bda-441b-9fa9-cbd8e940c142/camera/54e019c6cb9b/motion",
-      "trigger_field": "state",
-      "action_topic": "zigbee2mqtt/0x90fd9ffffe1a6a0f/set",
-      "observations": [
-        {
-          "delay_seconds": 2.0,
-          "timestamp": "2025-12-20T08:59:19.268476"
-        }
-      ]
-    },
-    {
-      "trigger_topic": "zigbee2mqtt/0xbc33acfffe870a61",
-      "trigger_field": "occupancy",
-      "action_topic": "zigbee2mqtt/0xa4c138725761cac1/set",
-      "observations": [
-        {
-          "delay_seconds": 9.0,
-          "timestamp": "2025-12-20T10:48:09.229003"
+          "delay_seconds": 8,
+          "timestamp": "2025-12-23T22:11:26.274202"
         },
         {
-          "delay_seconds": 9.0,
-          "timestamp": "2025-12-20T10:54:09.071478"
+          "delay_seconds": 9,
+          "timestamp": "2025-12-23T22:11:26.556090"
         }
       ]
     },
     {
-      "trigger_topic": "zigbee2mqtt/0xbc33acfffe870a61",
+      "trigger_topic": "zigbee2mqtt/bedroom_pir",
       "trigger_field": "occupancy",
-      "action_topic": "zigbee2mqtt/pp-vaatwasser",
+      "action_topic": "zigbee2mqtt/bedroom_light/set",
       "observations": [
         {
-          "delay_seconds": 2.0,
-          "timestamp": "2025-12-20T10:59:19.025467"
-        }
-      ]
-    },
-    {
-      "trigger_topic": "zigbee2mqtt/0xbc33acfffe870a61",
-      "trigger_field": "occupancy",
-      "action_topic": "zigbee2mqtt/0xa4c138f71aaea147",
-      "observations": [
-        {
-          "delay_seconds": 10.0,
-          "timestamp": "2025-12-20T10:59:19.028292"
-        }
-      ]
-    },
-    {
-      "trigger_topic": "homie/homey/multisensor-6/alarm-motion",
-      "trigger_field": "alarm-motion",
-      "action_topic": "zigbee2mqtt/0xa4c138dafc9a42aa",
-      "observations": [
-        {
-          "delay_seconds": 10.0,
-          "timestamp": "2025-12-20T18:04:55.636592"
-        }
-      ]
-    },
-    {
-      "trigger_topic": "homie/homey/multisensor-6/alarm-motion",
-      "trigger_field": "alarm-motion",
-      "action_topic": "zigbee2mqtt/0xa4c138dafc9a42aa/set",
-      "observations": [
-        {
-          "delay_seconds": 10.0,
-          "timestamp": "2025-12-20T20:38:51.386409"
-        }
-      ]
-    },
-    {
-      "trigger_topic": "homie/homey/multisensor-6/alarm-motion",
-      "trigger_field": "alarm-motion",
-      "action_topic": "zigbee2mqtt/0xa4c138725761cac1/set",
-      "observations": [
-        {
-          "delay_seconds": 10.0,
-          "timestamp": "2025-12-20T20:43:25.886421"
-        }
-      ]
-    },
-    {
-      "trigger_topic": "zigbee2mqtt/0x04cd15fffe9bdadc",
-      "trigger_field": "action",
-      "action_topic": "zigbee2mqtt/0x90fd9ffffe1a6a0f/set",
-      "observations": [
-        {
-          "delay_seconds": 5.0,
-          "timestamp": "2025-12-20T20:51:24.661169"
-        }
-      ]
-    },
-    {
-      "trigger_topic": "zigbee2mqtt/0xbc33acfffe870a61",
-      "trigger_field": "occupancy",
-      "action_topic": "zigbee2mqtt/0xa4c138dafc9a42aa",
-      "observations": [
-        {
-          "delay_seconds": 8.0,
-          "timestamp": "2025-12-20T20:56:12.290748"
-        }
-      ]
-    },
-    {
-      "trigger_topic": "homie/homey/multisensor-6",
-      "trigger_field": "alarm-motion",
-      "action_topic": "zigbee2mqtt/0xa4c138dafc9a42aa/set",
-      "observations": [
-        {
-          "delay_seconds": 2.0,
-          "timestamp": "2025-12-21T07:34:49.792056"
+          "delay_seconds": 10,
+          "timestamp": "2025-12-23T22:11:40.286344"
         },
         {
-          "delay_seconds": 2.0,
-          "timestamp": "2025-12-21T10:38:23.031498"
+          "delay_seconds": 9,
+          "timestamp": "2025-12-23T22:11:40.592974"
         }
       ]
     },
     {
-      "trigger_topic": "homie/homey/multisensor-6",
-      "trigger_field": "alarm-motion",
-      "action_topic": "zigbee2mqtt/0xa4c1388ceca33662/set",
+      "trigger_topic": "zigbee2mqtt/living_room_thermometer",
+      "trigger_field": "temperature",
+      "action_topic": "zigbee2mqtt/thermostat/set",
       "observations": [
         {
-          "delay_seconds": 5.0,
-          "timestamp": "2025-12-21T07:34:49.805093"
+          "delay_seconds": 10,
+          "timestamp": "2025-12-23T22:11:46.829833"
         }
       ]
     },
     {
-      "trigger_topic": "homie/homey/multisensor-6",
-      "trigger_field": "alarm-motion",
-      "action_topic": "zigbee2mqtt/test_light/set",
+      "trigger_topic": "zigbee2mqtt/backyard_door",
+      "trigger_field": "door",
+      "action_topic": "zigbee2mqtt/backyard_light/set",
       "observations": [
         {
-          "delay_seconds": 134.0,
-          "timestamp": "2025-12-21T07:38:03.063826"
+          "delay_seconds": 2,
+          "timestamp": "2025-12-23T22:11:54.940770"
         },
         {
-          "delay_seconds": 134.0,
-          "timestamp": "2025-12-21T07:39:56.388746"
+          "delay_seconds": 4,
+          "timestamp": "2025-12-23T22:11:55.380687"
         }
       ]
     },
     {
-      "trigger_topic": "ring/8bca0aef-8bda-441b-9fa9-cbd8e940c142/camera/54e019c6cb9b/motion",
-      "trigger_field": "state",
-      "action_topic": "zigbee2mqtt/0xa4c138dafc9a42aa",
+      "trigger_topic": "zigbee2mqtt/living_room_pir",
+      "trigger_field": "presence",
+      "action_topic": "zigbee2mqtt/living_room_light/set",
       "observations": [
         {
-          "delay_seconds": 16.0,
-          "timestamp": "2025-12-21T10:52:49.599935"
+          "delay_seconds": 10,
+          "timestamp": "2025-12-23T22:12:23.016366"
+        },
+        {
+          "delay_seconds": 12,
+          "timestamp": "2025-12-23T22:12:23.398027"
+        },
+        {
+          "delay_seconds": 11,
+          "timestamp": "2025-12-23T22:12:23.399058"
+        },
+        {
+          "delay_seconds": 18,
+          "timestamp": "2025-12-23T22:12:32.715201"
+        },
+        {
+          "delay_seconds": 19,
+          "timestamp": "2025-12-23T22:12:32.715808"
+        },
+        {
+          "delay_seconds": 18,
+          "timestamp": "2025-12-23T22:12:32.716120"
+        },
+        {
+          "delay_seconds": 30,
+          "timestamp": "2025-12-23T22:12:38.248754"
         }
       ]
     }

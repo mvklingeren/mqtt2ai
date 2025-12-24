@@ -151,6 +151,17 @@ def create_rule(
         else existing_rule_by_logic
     )
 
+    # If rule already exists with same trigger+action, don't update unnecessarily
+    if existing_index is not None:
+        existing_rule = rules_data["rules"][existing_index]
+        # Check if the rule is essentially the same (same trigger value)
+        if existing_rule.get("trigger", {}).get("value") == parsed_trigger_value:
+            return (
+                f"Rule '{existing_rule.get('id', rule_id)}' already exists for "
+                f"{trigger_topic}[{trigger_field}={trigger_value}] -> {action_topic}. "
+                "No update needed."
+            )
+
     if existing_index is not None:
         # Update existing rule (increment occurrences if updating)
         # PRESERVE the enabled state from the existing rule
@@ -244,6 +255,20 @@ def get_learned_rules() -> str:
     return json.dumps(rules_data, indent=2)
 
 
+def _rule_exists_for_pattern(
+    trigger_topic: str, trigger_field: str, action_topic: str
+) -> bool:
+    """Check if a rule already exists for this trigger->action pattern."""
+    rules_data = load_json_file(LEARNED_RULES_FILE, {"rules": []})
+    
+    for rule in rules_data["rules"]:
+        if (rule.get("trigger", {}).get("topic") == trigger_topic and
+                rule.get("trigger", {}).get("field") == trigger_field and
+                rule.get("action", {}).get("topic") == action_topic):
+            return True
+    return False
+
+
 @mcp.tool()
 def record_pattern_observation(
     trigger_topic: str,
@@ -267,6 +292,13 @@ def record_pattern_observation(
     Returns:
         Status message indicating observation count
     """
+    # Check if a rule already exists for this pattern - don't re-learn
+    if _rule_exists_for_pattern(trigger_topic, trigger_field, action_topic):
+        return (
+            f"Rule already exists for {trigger_topic}[{trigger_field}] -> "
+            f"{action_topic}. No need to re-learn this pattern."
+        )
+
     # Check if this pattern has been rejected - don't track it
     if _is_pattern_rejected(trigger_topic, trigger_field, action_topic):
         return (

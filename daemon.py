@@ -21,8 +21,9 @@ from typing import Optional
 from config import Config
 from knowledge_base import KnowledgeBase
 from mqtt_client import MqttClient
+from mqtt_simulator import MqttSimulator
 from ai_agent import AiAgent
-from trigger_analyzer import TriggerAnalyzer
+from trigger_analyzer import TriggerAnalyzer, TriggerResult
 
 VERSION = "0.2"
 
@@ -40,6 +41,7 @@ class AiRequest:
     """Represents a request for AI analysis."""
     snapshot: str
     reason: str
+    trigger_result: Optional[TriggerResult] = None
 
 
 def setup_logging(config: Config):
@@ -66,12 +68,19 @@ def print_banner(config: Config):
     elif provider == "codex-openai":
         model = config.codex_model
     elif provider == "openai-compatible":
-        model = config.openai_model
+        models = config.openai_models
+        model = f"{len(models)} models (round-robin)" if len(models) > 1 else models[0] if models else "none"
     else:
         model = "unknown"
 
     print(f"{cyan}{BANNER}{reset}")
     print(f"  {dim}v{VERSION}{reset}  {bold}AI:{reset} {yellow}{provider}{reset} / {model}")
+    
+    # Show simulation mode if active
+    if config.simulation_file:
+        magenta = "\033[95m"
+        print(f"  {bold}{magenta}[SIMULATION MODE]{reset} {dim}{config.simulation_file}{reset}")
+    
     print()
 
 
@@ -88,7 +97,11 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         self.kb = KnowledgeBase(config)
         self.mqtt = MqttClient(config)
         self.ai = AiAgent(config)
-        self.trigger_analyzer = TriggerAnalyzer(config.filtered_triggers_file)
+        # In simulation mode, disable cooldown to allow rapid triggering
+        self.trigger_analyzer = TriggerAnalyzer(
+            config.filtered_triggers_file,
+            simulation_mode=bool(config.simulation_file)
+        )
 
         self.messages_deque: Deque[str] = collections.deque(maxlen=config.max_messages)
         self.new_message_count = 0
@@ -106,6 +119,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         # Keyboard input thread for manual triggers
         self.keyboard_thread: Optional[threading.Thread] = None
         self.manual_trigger = False  # Flag to track if trigger was manual
+        self.last_trigger_result: Optional[TriggerResult] = None  # Last trigger result
 
     def start(self):
         """Start the daemon."""
@@ -137,10 +151,15 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         )
         self.keyboard_thread.start()
 
-        # Start collector
-        self.collector_thread = threading.Thread(
-            target=self._collector_loop, daemon=True, name="MQTT-Collector"
-        )
+        # Start collector (simulation or real MQTT)
+        if self.config.simulation_file:
+            self.collector_thread = threading.Thread(
+                target=self._simulation_collector_loop, daemon=True, name="Simulation-Collector"
+            )
+        else:
+            self.collector_thread = threading.Thread(
+                target=self._collector_loop, daemon=True, name="MQTT-Collector"
+            )
         self.collector_thread.start()
 
         if self.config.no_ai:
@@ -178,14 +197,16 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                     if instant_trigger:
                         self.ai_event.clear()
 
-                    # Capture snapshot
+                    # Capture snapshot and trigger result
                     with self.lock:
                         snapshot = "\n".join(list(self.messages_deque))
                         self.new_message_count = 0
                         last_check_time = time.time()
+                        trigger_result = self.last_trigger_result
+                        self.last_trigger_result = None  # Clear after use
 
                     if snapshot:
-                        self._handle_ai_check(snapshot, reason)
+                        self._handle_ai_check(snapshot, reason, trigger_result)
 
         except KeyboardInterrupt:
             logging.info("Stopping daemon (KeyboardInterrupt)...")
@@ -207,6 +228,16 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
 
     def _keyboard_input_loop(self):
         """Background thread that listens for Enter key to trigger manual AI check."""
+        # Don't start keyboard input in simulation mode (stdin may not be available)
+        if self.config.simulation_file:
+            logging.debug("Keyboard input disabled in simulation mode")
+            return
+        
+        # Check if stdin is a TTY (interactive terminal)
+        if not sys.stdin.isatty():
+            logging.debug("Keyboard input disabled (stdin is not a TTY)")
+            return
+        
         logging.info("Press [Enter] to trigger an immediate AI check")
 
         while self.running:
@@ -214,7 +245,10 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 ready, _, _ = select.select([sys.stdin], [], [], 1.0)
                 if ready:
                     line = sys.stdin.readline()
-                    if line in ('\n', ''):
+                    if line == '':
+                        # EOF reached, stop listening
+                        break
+                    if line == '\n':
                         self.manual_trigger = True
                         self.ai_event.set()
                         logging.info("Manual AI check triggered")
@@ -222,7 +256,10 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 # Stdin might not be available (e.g., when running as service)
                 time.sleep(1.0)
 
-    def _handle_ai_check(self, snapshot: str, reason: str):
+    def _handle_ai_check(
+        self, snapshot: str, reason: str,
+        trigger_result: Optional[TriggerResult] = None
+    ):
         """Handle the AI check based on mode."""
         if self.config.no_ai:
             logging.info(
@@ -239,7 +276,9 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 )
                 return
 
-            request = AiRequest(snapshot=snapshot, reason=reason)
+            request = AiRequest(
+                snapshot=snapshot, reason=reason, trigger_result=trigger_result
+            )
             self.ai_queue.put(request)
             logging.debug("Queued AI request (reason: %s)", reason)
 
@@ -263,7 +302,10 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 try:
                     # Reload knowledge base to get any updates
                     self.kb.load_all()
-                    self.ai.run_analysis(request.snapshot, self.kb, request.reason)
+                    self.ai.run_analysis(
+                        request.snapshot, self.kb, request.reason,
+                        request.trigger_result
+                    )
                 finally:
                     self.ai_busy.clear()
                     self.ai_queue.task_done()
@@ -276,6 +318,23 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 self.ai_busy.clear()
 
         logging.info("AI worker thread stopped")
+
+    def _wait_for_ai_completion(self, timeout: float = 60.0):
+        """Wait for the AI worker to finish processing the current request.
+        
+        Used in simulation mode to ensure deterministic pattern learning
+        by waiting for each trigger to be fully processed before continuing.
+        """
+        # First, wait a short time for the request to be picked up from the queue
+        time.sleep(0.1)
+        
+        # Then wait for AI to finish (ai_busy will be set while processing)
+        start_wait = time.time()
+        while self.ai_busy.is_set() and self.running:
+            if time.time() - start_wait > timeout:
+                logging.warning("AI completion wait timed out after %.1fs", timeout)
+                break
+            time.sleep(0.1)
 
     def _shutdown(self):
         """Gracefully shutdown the daemon and its threads."""
@@ -359,6 +418,8 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 is_trigger_line = False
                 if trigger_result.should_trigger:
                     self._print_trigger(trigger_result, line)
+                    with self.lock:
+                        self.last_trigger_result = trigger_result
                     self.ai_event.set()
                     is_trigger_line = True
 
@@ -390,6 +451,106 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             os.kill(os.getpid(), signal.SIGTERM)  # Kill daemon
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("Collector thread error: %s", e)
+
+    def _simulation_collector_loop(self):  # pylint: disable=too-many-branches,too-many-statements
+        """Background thread that replays simulated MQTT messages from a scenario file."""
+        logging.info(
+            "Starting SIMULATION collector from '%s'...",
+            self.config.simulation_file
+        )
+
+        try:
+            simulator = MqttSimulator(
+                self.config.simulation_file,
+                self.config.simulation_speed
+            )
+
+            start_time = time.time()
+            quiet_period_over = False
+
+            for topic, payload in simulator.run_simulation():
+                if not self.running:
+                    break
+
+                # Skip ignored prefixes
+                if any(
+                    topic.startswith(p)
+                    for p in self.config.ignore_printing_prefixes
+                ):
+                    continue
+
+                # Build the line in mosquitto_sub format: "topic payload"
+                line = f"{topic} {payload}"
+
+                current_topic = topic
+                current_payload = payload
+
+                if not current_payload or not current_payload.isprintable():
+                    continue
+
+                # Display Logic
+                elapsed = time.time() - start_time
+                should_print = False
+
+                if elapsed > self.config.skip_printing_seconds:
+                    if not quiet_period_over:
+                        logging.info("--- Initial quiet period over. Monitoring... ---")
+                        quiet_period_over = True
+
+                    if current_topic not in self.config.ignore_printing_topics:
+                        should_print = True
+
+                # Analysis
+                trigger_result = self.trigger_analyzer.analyze(
+                    current_topic, current_payload
+                )
+
+                is_trigger_line = False
+                if trigger_result.should_trigger:
+                    self._print_trigger(trigger_result, line)
+                    with self.lock:
+                        self.last_trigger_result = trigger_result
+                    self.ai_event.set()
+                    is_trigger_line = True
+                    
+                    # In simulation mode, wait for AI to finish before continuing
+                    # This ensures deterministic pattern learning
+                    if not self.config.no_ai:
+                        self._wait_for_ai_completion()
+
+                # Verbose printing for non-trigger lines
+                if should_print and not is_trigger_line and self.config.verbose:
+                    if self.config.compress_output:
+                        compressed = self._compress_line(line)
+                        if compressed:  # Skip if fully compressed to nothing
+                            print(f"{timestamp()} {compressed}")
+                    else:
+                        print(f"{timestamp()} {line}")
+
+                # Store
+                with self.lock:
+                    self.messages_deque.append(f"{timestamp()} {line}")
+                    self.new_message_count += 1
+
+            # Simulation complete - wait for any pending AI analysis
+            logging.info("Simulation complete. Waiting for AI to finish processing...")
+            
+            # Give AI time to process final messages
+            time.sleep(2.0)
+            
+            # Wait for AI queue to be empty
+            if not self.config.no_ai:
+                self.ai_queue.join()
+            
+            logging.info("All AI processing complete. Shutting down...")
+            self.running = False
+
+        except FileNotFoundError as e:
+            logging.critical("CRITICAL: Scenario file not found: %s", e)
+            os.kill(os.getpid(), signal.SIGTERM)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.error("Simulation collector error: %s", e)
+            self.running = False
 
     def _compress_line(self, line: str) -> Optional[str]:
         """Compress a single MQTT message line by removing noise fields.

@@ -7,7 +7,22 @@ settings, and filtering options.
 import argparse
 import os
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
+
+# Load .env file if present (for API keys etc.)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not installed, rely on environment variables
+
+
+# Default models for round-robin (Groq free tier, excluding guard models)
+DEFAULT_OPENAI_MODELS = [
+    "llama-3.3-70b-versatile",  # More reliable tool calling than Llama 4
+    # "meta-llama/llama-4-maverick-17b-128e-instruct",
+    # "meta-llama/llama-4-scout-17b-16e-instruct",  # Unreliable tool calling
+]
 
 
 @dataclass
@@ -34,7 +49,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
     rejected_patterns_file: str = "rejected_patterns.json"
 
     # AI Provider
-    ai_provider: str = "codex-openai"  # "gemini", "claude", or "codex-openai"
+    ai_provider: str = "openai-compatible"  # "openai-compatible" (Groq), "gemini", "claude", "codex-openai"
 
     # Gemini
     gemini_command: str = "/opt/homebrew/bin/gemini"
@@ -49,10 +64,26 @@ class Config:  # pylint: disable=too-many-instance-attributes
     codex_command: str = "codex"  # Assumes npm global install puts it in PATH
     codex_model: str = "gpt-5-nano" #"gpt-4.1-mini"
 
-    # OpenAI-compatible API (Ollama, LM Studio, vLLM, etc.)
-    openai_api_base: str = "https://rimrhxmmxh4svi-8000.proxy.runpod.net/v1"  # RunPod vLLM
-    openai_api_key: str = "xyz"  # RunPod API key
-    openai_model: str = "Qwen/Qwen3-4B-Instruct-2507"  # Model name as shown in /v1/models
+    # OpenAI-compatible API (Groq, Ollama, LM Studio, vLLM, etc.)
+    openai_api_base: str = "https://api.groq.com/openai/v1"  # Groq (blazing fast!)
+    openai_api_key: str = ""  # Set via GROQ_API_KEY or --openai-api-key
+    openai_models: List[str] = field(default_factory=lambda: DEFAULT_OPENAI_MODELS.copy())
+    _model_index: int = field(default=0, repr=False)  # Internal counter for round-robin
+
+    def get_next_model(self) -> str:
+        """Get the next model in round-robin rotation."""
+        if not self.openai_models:
+            return "llama-3.3-70b-versatile"  # Fallback
+        model = self.openai_models[self._model_index % len(self.openai_models)]
+        self._model_index += 1
+        return model
+
+    @property
+    def openai_model(self) -> str:
+        """Return current model without advancing (for display/logging)."""
+        if not self.openai_models:
+            return "llama-3.3-70b-versatile"
+        return self.openai_models[self._model_index % len(self.openai_models)]
 
     # Filtering & Display
     verbose: bool = False
@@ -60,7 +91,10 @@ class Config:  # pylint: disable=too-many-instance-attributes
     demo_mode: bool = False
     no_ai: bool = False  # Run without making AI calls (logging only)
     test_ai: bool = False  # Test AI connection before starting daemon
-    disable_new_rules: bool = False  # If True, new rules are disabled by default
+    # If True, new rules are disabled by default. Set via env var or --disable-new-rules
+    disable_new_rules: bool = field(
+        default_factory=lambda: os.environ.get("DISABLE_NEW_RULES", "").lower() in ("1", "true", "yes")
+    )
     skip_printing_seconds: int = 3
     ignore_printing_topics: List[str] = field(
         default_factory=lambda: [
@@ -73,6 +107,10 @@ class Config:  # pylint: disable=too-many-instance-attributes
             "stat/",  # Tasmota logging/status messages
         ]
     )
+
+    # Simulation mode
+    simulation_file: Optional[str] = None  # Path to simulation scenario JSON file
+    simulation_speed: Optional[float] = None  # Override speed multiplier for simulation
 
     @classmethod
     def from_args(cls) -> 'Config':
@@ -96,7 +134,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
         parser.add_argument(
             "--ai-provider",
             choices=["gemini", "claude", "codex-openai", "openai-compatible"],
-            default=os.environ.get("AI_PROVIDER", "codex-openai"),
+            default=os.environ.get("AI_PROVIDER", "openai-compatible"),
             help="AI provider to use (gemini, claude, codex-openai, or openai-compatible)"
         )
 
@@ -142,21 +180,21 @@ class Config:  # pylint: disable=too-many-instance-attributes
             help="Codex/OpenAI Model ID"
         )
 
-        # OpenAI-compatible API (Ollama, LM Studio, vLLM, etc.)
+        # OpenAI-compatible API (Groq, Ollama, LM Studio, vLLM, etc.)
         parser.add_argument(
             "--openai-api-base",
-            default=os.environ.get("OPENAI_API_BASE", "https://rimrhxmmph4svi-8000.proxy.runpod.net/v1"),
-            help="Base URL for OpenAI-compatible API (e.g., RunPod vLLM, Ollama, LM Studio)"
+            default=os.environ.get("OPENAI_API_BASE", "https://api.groq.com/openai/v1"),
+            help="Base URL for OpenAI-compatible API (e.g., Groq, Ollama, LM Studio)"
         )
         parser.add_argument(
             "--openai-api-key",
-            default=os.environ.get("OPENAI_API_KEY", "sk-placeholder"),
-            help="API key for OpenAI-compatible API"
+            default=os.environ.get("GROQ_API_KEY", os.environ.get("OPENAI_API_KEY", "")),
+            help="API key for OpenAI-compatible API (uses GROQ_API_KEY or OPENAI_API_KEY)"
         )
         parser.add_argument(
-            "--openai-model",
-            default=os.environ.get("OPENAI_MODEL", "Qwen/Qwen3-4B-Instruct-2507"),
-            help="Model name for OpenAI-compatible API (e.g., Qwen/Qwen3-4B-Instruct-2507)"
+            "--openai-models",
+            default=os.environ.get("OPENAI_MODELS", ""),
+            help="Comma-separated list of models for round-robin (e.g., 'model1,model2,model3')"
         )
 
         parser.add_argument(
@@ -187,7 +225,21 @@ class Config:  # pylint: disable=too-many-instance-attributes
         parser.add_argument(
             "--disable-new-rules",
             action="store_true",
-            help="New rules are disabled by default"
+            default=os.environ.get("DISABLE_NEW_RULES", "").lower() in ("1", "true", "yes"),
+            help="New rules are disabled by default (env: DISABLE_NEW_RULES)"
+        )
+
+        # Simulation mode
+        parser.add_argument(
+            "--simulation",
+            metavar="FILE",
+            help="Run in simulation mode using the specified scenario JSON file"
+        )
+        parser.add_argument(
+            "--simulation-speed",
+            type=float,
+            metavar="MULTIPLIER",
+            help="Override speed multiplier for simulation (e.g., 10 = 10x faster)"
         )
 
         args = parser.parse_args()
@@ -205,11 +257,16 @@ class Config:  # pylint: disable=too-many-instance-attributes
         c.codex_model = args.codex_model
         c.openai_api_base = args.openai_api_base
         c.openai_api_key = args.openai_api_key
-        c.openai_model = args.openai_model
+        # Parse comma-separated models list, use defaults if empty
+        if args.openai_models.strip():
+            c.openai_models = [m.strip() for m in args.openai_models.split(",") if m.strip()]
+        # else: keep default from dataclass
         c.verbose = args.verbose
         c.compress_output = args.compress
         c.demo_mode = args.demo
         c.no_ai = args.no_ai
         c.test_ai = args.test_ai
         c.disable_new_rules = args.disable_new_rules
+        c.simulation_file = args.simulation
+        c.simulation_speed = args.simulation_speed
         return c

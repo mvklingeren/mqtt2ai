@@ -4,6 +4,7 @@
 This module provides the main entry point for the daemon, handling
 argument parsing, AI connection testing, and signal handling.
 """
+import os
 import sys
 import logging
 import signal
@@ -16,6 +17,10 @@ from ai_agent import AiAgent
 def main():
     """Main entry point for the MQTT AI Daemon."""
     config = Config.from_args()
+
+    # Propagate disable_new_rules to environment for child processes and lazy imports
+    if config.disable_new_rules:
+        os.environ["DISABLE_NEW_RULES"] = "true"
 
     # Test AI connection if requested
     if config.test_ai:

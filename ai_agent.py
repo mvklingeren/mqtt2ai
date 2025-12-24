@@ -8,6 +8,7 @@ import subprocess
 import shutil
 import json
 import logging
+import time
 from datetime import datetime
 
 try:
@@ -18,6 +19,7 @@ except ImportError:
 
 from config import Config
 from knowledge_base import KnowledgeBase
+from prompt_builder import PromptBuilder
 
 # Import MCP tool implementations for OpenAI function calling
 # pylint: disable=import-outside-toplevel
@@ -218,6 +220,14 @@ OPENAI_TOOLS = [
     }
 ]
 
+# Reduced tool set for rate-limited providers (Groq free tier, Ollama)
+# Full 8 tools is ~4K tokens, this set is ~1K tokens
+OPENAI_TOOLS_MINIMAL = [
+    OPENAI_TOOLS[0],  # send_mqtt_message
+    OPENAI_TOOLS[1],  # record_pattern_observation
+    OPENAI_TOOLS[2],  # create_rule
+]
+
 
 def execute_tool_call(tool_name: str, arguments: dict) -> str:
     """Execute an MCP tool and return the result."""
@@ -264,27 +274,9 @@ def timestamp() -> str:
 class AiAgent:
     """Handles interaction with AI CLI tools (Gemini, Claude, or Codex)."""
 
-    # Fields to REMOVE from payloads (known noise, not useful for patterns)
-    # Everything else is kept by default
-    REMOVE_FIELDS = {
-        # Zigbee device metadata (noise)
-        "linkquality", "voltage", "energy",
-        "update", "update_available",
-        # Zigbee device settings (rarely change, not triggers)
-        "child_lock", "countdown", "indicator_mode", "power_outage_memory",
-        # Ring camera/device noise
-        "timestamp", "type", "wirelessNetwork", "wirelessSignal",
-        "firmwareStatus", "lastUpdate", "stream_Source", "still_Image_URL",
-        # Version info
-        "installed_version", "latest_version",
-        # Tasmota device noise
-        "Time", "Uptime", "UptimeSec", "Vcc", "Heap",
-        "SleepMode", "Sleep", "LoadAvg", "MqttCount",
-        "Hostname", "IPAddress",
-    }
-
     def __init__(self, config: Config):
         self.config = config
+        self.prompt_builder = PromptBuilder(config)
 
     def _get_cli_command(self) -> tuple[str, list[str]]:
         """Return the CLI executable path and arguments based on provider."""
@@ -321,8 +313,15 @@ class AiAgent:
         return cmd, args
 
     def run_analysis(self, messages_snapshot: str, kb: KnowledgeBase,
-                     trigger_reason: str):
-        """Construct the prompt and call the configured AI CLI."""
+                     trigger_reason: str, trigger_result=None):
+        """Construct the prompt and call the configured AI CLI.
+        
+        Args:
+            messages_snapshot: Raw MQTT messages as newline-separated string
+            kb: KnowledgeBase with rules, patterns, and rulebook
+            trigger_reason: Human-readable trigger reason string
+            trigger_result: Optional TriggerResult with trigger context
+        """
         cyan, reset = "\033[96m", "\033[0m"
         provider = self.config.ai_provider.upper()
         logging.info(
@@ -330,138 +329,90 @@ class AiAgent:
             cyan, provider, trigger_reason, reset
         )
 
-        # Compress the snapshot to reduce token usage
-        compressed_snapshot = self._compress_snapshot(messages_snapshot)
-        prompt = self._build_prompt(compressed_snapshot, kb, trigger_reason)
-        self._execute_ai_call(provider, prompt)
-
-    def _compress_snapshot(self, messages_snapshot: str) -> str:
-        """Compress MQTT payloads by removing known noise fields.
-
-        Uses a blacklist approach: removes known noise fields, keeps everything else.
-        Also removes nested objects and null values.
-        """
-        compressed_lines = []
-
-        for line in messages_snapshot.split('\n'):
-            if not line.strip():
-                continue
-
-            # Try to find JSON payload in the line
-            # Format is typically: [HH:MM:SS] topic/path {"key": "value", ...}
-            try:
-                # Find the start of JSON payload
-                json_start = line.find('{')
-                if json_start == -1:
-                    # No JSON payload, keep line as-is
-                    compressed_lines.append(line)
-                    continue
-
-                prefix = line[:json_start]
-                json_str = line[json_start:]
-
-                # Parse and filter the JSON
-                payload = json.loads(json_str)
-                if isinstance(payload, dict):
-                    filtered = {
-                        k: v for k, v in payload.items()
-                        if k not in self.REMOVE_FIELDS  # Blacklist approach
-                        and v is not None  # Remove null values
-                        and not isinstance(v, dict)  # Remove nested objects
-                    }
-                    if filtered:
-                        compressed_lines.append(
-                            f"{prefix}{json.dumps(filtered, separators=(',', ':'))}"
-                        )
-                    # Skip lines with no remaining fields
-                else:
-                    # Not a dict, keep as-is
-                    compressed_lines.append(line)
-
-            except json.JSONDecodeError:
-                # Not valid JSON, keep line as-is
-                compressed_lines.append(line)
-
-        return '\n'.join(compressed_lines)
-
-    def _build_prompt(self, messages_snapshot: str, kb: KnowledgeBase,
-                      trigger_reason: str) -> str:
-        """Build the prompt for the AI."""
-        demo_instruction = (
-            "**Demo mode is ENABLED - you MUST send a unique joke to jokes/ topic (see Rule 4).** "
-            if self.config.demo_mode else ""
-        )
-
-        # Helper to format sections
-        def format_section(title, data, description):
-            if not data or not data.get(list(data.keys())[0]):
-                return ""
-            return (
-                f"\n\n## {title}:\n{description}\n"
-                f"{json.dumps(data, indent=2)}"
+        # Use PromptBuilder for intelligent prompt construction
+        # Use compact prompt for openai-compatible providers to stay within token limits
+        # Groq free tier has 6-14K TPM limits, and tool call iterations accumulate tokens
+        if self.config.ai_provider == "openai-compatible":
+            prompt = self.prompt_builder.build_compact(
+                messages_snapshot, kb, trigger_result, trigger_reason
             )
-
-        rules_section = format_section(
-            "Learned Automation Rules",
-            kb.learned_rules,
-            "Execute these rules when their triggers match:"
-        ) or "\n\n## Learned Automation Rules:\nNo learned rules yet.\n"
-
-        patterns_section = format_section(
-            "Pending Pattern Observations",
-            kb.pending_patterns,
-            "These patterns are being tracked but haven't reached 3 occurrences:"
-        )
-
-        rejected_section = format_section(
-            "Rejected Patterns (DO NOT learn these)",
-            kb.rejected_patterns,
-            "These patterns have been explicitly rejected. Do NOT record or create:"
-        )
-
-        # Safety Check
-        safety_reminder = ""
-        trigger_lower = trigger_reason.lower()
-        if any(x in trigger_lower for x in ["temperature", "smoke", "water", "leak"]):
-            safety_reminder = (
-                "\n\n**SAFETY ALERT**: This analysis was triggered by a potential "
-                "safety event. Check for temperature > 50C, smoke: true, or "
-                "water_leak: true conditions and ACT IMMEDIATELY if found. "
-                "Safety actions take PRIORITY over pattern learning.\n"
+        else:
+            prompt = self.prompt_builder.build(
+                messages_snapshot, kb, trigger_result, trigger_reason
             )
+        
+        logging.debug("Prompt: %d chars (~%d tokens)", len(prompt), len(prompt)//4)
 
-        prompt = (
-            f"You are a home automation AI with pattern learning. {demo_instruction}"
-            f"{safety_reminder}"
-            "You have MCP tools available. Use the send_mqtt_message tool to publish "
-            "MQTT messages - do NOT use shell commands or file operations.\n\n"
-            "IMPORTANT: Your PRIMARY task is to detect trigger→action patterns "
-            "and call record_pattern_observation. "
-            "Look for PIR/motion sensors (occupancy:true) followed by light/switch "
-            "actions (/set topics with state:ON). "
-            "When you find such a pattern, ALWAYS call record_pattern_observation "
-            "with the trigger topic, field, action topic, and delay in seconds.\n\n"
-            "## Rulebook:\n"
-            f"{kb.rulebook_content}"
-            f"{rules_section}"
-            f"{patterns_section}"
-            f"{rejected_section}\n\n"
-            "## Latest MQTT Messages (analyze for trigger→action patterns):\n"
-            f"{messages_snapshot}\n\n"
-            "REMINDER: Look for patterns like 'zigbee2mqtt/xxx_pir {occupancy:true}' "
-            "followed by 'zigbee2mqtt/xxx/set {state:ON}' and call "
-            "record_pattern_observation!\n"
-        )
-        return prompt
+        # Get counts for stats display
+        rules_count = len(kb.learned_rules.get('rules', []))
+        patterns_count = len(kb.pending_patterns.get('patterns', []))
 
-    def _execute_ai_call(self, provider: str, prompt: str):
+        self._execute_ai_call(provider, prompt, rules_count, patterns_count)
+
+    def _execute_ai_call(self, provider: str, prompt: str,
+                         rules_count: int = 0, patterns_count: int = 0):
         """Execute the AI call (CLI or API based on provider)."""
         if self.config.ai_provider == "openai-compatible":
-            self._execute_openai_api_call(provider, prompt)
+            self._execute_openai_api_call(provider, prompt, rules_count, patterns_count)
         else:
             self._execute_cli_call(provider, prompt)
 
-    def _execute_openai_api_call(self, provider: str, prompt: str):
+    def _call_with_retry(self, client, model: str, messages: list,
+                          tools: list, extra_body: dict = None,
+                          max_retries: int = 2, base_delay: float = 1.0):
+        """Call the API with retry logic for transient errors.
+        
+        Args:
+            client: OpenAI client
+            model: Model name
+            messages: Chat messages
+            tools: Tool definitions
+            extra_body: Extra parameters for the request
+            max_retries: Maximum number of retries (default 2)
+            base_delay: Base delay in seconds for exponential backoff
+            
+        Returns:
+            API response
+            
+        Raises:
+            Exception if all retries fail
+        """
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                return client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    extra_body=extra_body,
+                )
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                last_error = e
+                err_str = str(e)
+                
+                # Check if this is a retryable error (400/429/500/502/503/504)
+                is_retryable = any(code in err_str for code in [
+                    "400", "429", "500", "502", "503", "504",
+                    "rate limit", "timeout", "temporarily"
+                ])
+                
+                if attempt < max_retries and is_retryable:
+                    delay = base_delay * (2 ** attempt)  # Exponential backoff
+                    logging.warning(
+                        "API call failed (attempt %d/%d): %s. Retrying in %.1fs...",
+                        attempt + 1, max_retries + 1, err_str[:100], delay
+                    )
+                    time.sleep(delay)
+                else:
+                    # Not retryable or out of retries
+                    raise
+        
+        # Should not reach here, but just in case
+        raise last_error  # type: ignore
+
+    def _execute_openai_api_call(self, provider: str, prompt: str,
+                                  rules_count: int = 0, patterns_count: int = 0):
         """Execute AI call via OpenAI-compatible API with function calling."""
         if not OPENAI_AVAILABLE:
             logging.error(
@@ -470,70 +421,120 @@ class AiAgent:
             return
 
         try:
+            # Use httpx timeout for proper timeout handling with Ollama
+            import httpx
             client = OpenAI(
                 base_url=self.config.openai_api_base,
                 api_key=self.config.openai_api_key,
+                timeout=httpx.Timeout(120.0, connect=10.0),  # Ollama with tools can take 30-60s
+            )
+
+            # Detect if using Ollama (for Qwen3 optimizations)
+            is_ollama = "11434" in self.config.openai_api_base
+
+            # System prompt with /no_think for Qwen3 models on Ollama
+            system_content = (
+                "/no_think\n" if is_ollama else ""
+            ) + (
+                "You are a home automation AI assistant with access to MQTT tools. "
+                "Be brief and concise. "
+                "Analyze MQTT messages and take actions using the available functions. "
+                "When you detect trigger->action patterns, call record_pattern_observation. "
+                "After 3+ observations, call create_rule to formalize the automation. "
+                "Use send_mqtt_message to control devices directly when needed."
             )
 
             messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a home automation AI assistant with access to MQTT tools. "
-                        "Analyze MQTT messages and take actions using the available functions. "
-                        "When you detect trigger->action patterns, call record_pattern_observation. "
-                        "After 3+ observations, call create_rule to formalize the automation. "
-                        "Use send_mqtt_message to control devices directly when needed."
-                    )
-                },
+                {"role": "system", "content": system_content},
                 {"role": "user", "content": prompt}
             ]
 
             cyan, reset = "\033[96m", "\033[0m"
             purple = "\033[95m"  # Magenta/purple for tool calls
-            max_iterations = 10  # Prevent infinite loops
+            orange_bold = "\033[1;38;5;208m"  # Bold orange for stats
+            # Limit iterations to prevent infinite loops
+            # With compact prompt (~500 tokens), Groq can handle the same as others
+            max_iterations = 10
 
             # Try with tool calling first, fall back to no tools if server doesn't support it
             use_tools = True
 
+            # Extra options for Ollama (num_predict limits thinking overhead)
+            extra_body = {"options": {"num_predict": 200}} if is_ollama else None
+
+            # Use minimal tools for rate-limited providers (Groq free tier, Ollama)
+            # Full 8 tools is ~4K tokens, minimal 2 tools is ~500 tokens
+            is_groq = "groq.com" in self.config.openai_api_base
+            tools_to_use = OPENAI_TOOLS_MINIMAL if (is_ollama or is_groq) else OPENAI_TOOLS
+
+            # Get model for this request (round-robin across configured models)
+            current_model = self.config.get_next_model()
+
+            # Format prompt size for display (K for thousands)
+            prompt_chars = len(prompt)
+            prompt_display = f"{prompt_chars/1000:.1f}K" if prompt_chars >= 1000 else str(prompt_chars)
+            est_tokens = prompt_chars // 4
+
+            # Log AI request stats
+            logging.info(
+                "%s[AI Request] model=%s | prompt=%s chars (~%d tok) | rules=%d patterns=%d | tools=%d%s",
+                orange_bold, current_model, prompt_display, est_tokens,
+                rules_count, patterns_count, len(tools_to_use), reset
+            )
+
+            # Track total tokens across iterations
+            total_prompt_tokens = 0
+            total_completion_tokens = 0
+
             for iteration in range(max_iterations):
                 try:
                     if use_tools:
-                        response = client.chat.completions.create(
-                            model=self.config.openai_model,
-                            messages=messages,
-                            tools=OPENAI_TOOLS,
-                            tool_choice="auto",
-                            timeout=120,
+                        response = self._call_with_retry(
+                            client, current_model, messages, tools_to_use, extra_body
                         )
                     else:
                         response = client.chat.completions.create(
-                            model=self.config.openai_model,
+                            model=current_model,
                             messages=messages,
-                            timeout=120,
+                            extra_body=extra_body,
                         )
                 except Exception as api_err:
                     # Check if error is about tool calling not being supported
                     err_str = str(api_err)
+                    logging.warning("API error: %s", err_str)
                     if "tool" in err_str.lower() and use_tools:
                         logging.warning(
                             "Server doesn't support tool calling, falling back to text-only mode"
                         )
                         use_tools = False
                         response = client.chat.completions.create(
-                            model=self.config.openai_model,
+                            model=current_model,
                             messages=messages,
-                            timeout=120,
+                            extra_body=extra_body,
                         )
                     else:
                         raise
 
                 message = response.choices[0].message
 
+                # Track token usage if available
+                if response.usage:
+                    total_prompt_tokens += response.usage.prompt_tokens or 0
+                    total_completion_tokens += response.usage.completion_tokens or 0
+                    logging.info(
+                        "%s[AI Tokens] iter %d/%d | %d prompt + %d completion = %d total%s",
+                        orange_bold, iteration + 1, max_iterations,
+                        response.usage.prompt_tokens or 0,
+                        response.usage.completion_tokens or 0,
+                        response.usage.total_tokens or 0, reset
+                    )
+
                 # Check if the model wants to call functions
                 if message.tool_calls:
-                    # Add the assistant's response to messages
-                    messages.append(message)
+                    # Add the assistant's response to messages as a clean dict
+                    # Using model_dump(exclude_none=True) removes null fields that may confuse
+                    # non-OpenAI providers like Groq with Llama models
+                    messages.append(message.model_dump(exclude_none=True))
 
                     # Process each tool call
                     for tool_call in message.tool_calls:
@@ -560,6 +561,14 @@ class AiAgent:
                             "tool_call_id": tool_call.id,
                             "content": result
                         })
+
+                    # After first iteration, compress the original prompt to save tokens
+                    # The AI has already analyzed the MQTT data and made decisions
+                    if iteration == 0 and len(messages) > 2:
+                        messages[1] = {
+                            "role": "user",
+                            "content": "[MQTT analysis complete - context above. Continue with tool results.]"
+                        }
                 else:
                     # No more tool calls, get the final response
                     if message.content:
@@ -567,9 +576,24 @@ class AiAgent:
                             "%sAI Response: %s%s",
                             cyan, message.content.strip(), reset
                         )
+                    # Log total tokens if we had multiple iterations
+                    if iteration > 0:
+                        logging.info(
+                            "%s[AI Total] %d iterations | %d prompt + %d completion = %d tokens%s",
+                            orange_bold, iteration + 1, total_prompt_tokens,
+                            total_completion_tokens,
+                            total_prompt_tokens + total_completion_tokens, reset
+                        )
                     break
             else:
                 logging.warning("Max tool call iterations reached")
+                # Log total tokens even when max iterations reached
+                logging.info(
+                    "%s[AI Total] %d iterations (max) | %d prompt + %d completion = %d tokens%s",
+                    orange_bold, max_iterations, total_prompt_tokens,
+                    total_completion_tokens,
+                    total_prompt_tokens + total_completion_tokens, reset
+                )
 
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("OpenAI API error: %s", e)
@@ -631,39 +655,59 @@ class AiAgent:
             return False, "OpenAI SDK not installed. Run: pip install openai"
 
         try:
+            import httpx
             client = OpenAI(
                 base_url=self.config.openai_api_base,
                 api_key=self.config.openai_api_key,
+                timeout=httpx.Timeout(120.0, connect=10.0),  # Ollama with tools can take 30-60s
             )
 
+            # Detect if using Ollama (for Qwen3 optimizations)
+            is_ollama = "11434" in self.config.openai_api_base
+            extra_body = {"options": {"num_predict": 200}} if is_ollama else None
+            system_msg = "/no_think\nBe brief." if is_ollama else None
+
+            # Get model for this test (round-robin)
+            current_model = self.config.get_next_model()
+
             # First test: basic completion
+            messages = []
+            if system_msg:
+                messages.append({"role": "system", "content": system_msg})
+            messages.append({"role": "user", "content": "Write a very short, funny one-liner joke."})
+
             response = client.chat.completions.create(
-                model=self.config.openai_model,
-                messages=[
-                    {"role": "user", "content": "Write a very short, funny one-liner joke."}
-                ],
-                timeout=60,
+                model=current_model,
+                messages=messages,
+                extra_body=extra_body,
             )
             joke = response.choices[0].message.content.strip()
 
             # Second test: try function calling with send_mqtt_message
             tool_call_info = ""
             try:
+                messages = []
+                if system_msg:
+                    messages.append({"role": "system", "content": system_msg})
+                messages.append({
+                    "role": "user",
+                    "content": "Send a test message with your joke to MQTT topic 'test/ai_joke'. Use the send_mqtt_message function."
+                })
+
+                # Use minimal tools for Ollama and Groq (rate limited)
+                is_groq = "groq.com" in self.config.openai_api_base
+                tools_to_use = OPENAI_TOOLS_MINIMAL if (is_ollama or is_groq) else OPENAI_TOOLS
+
                 response = client.chat.completions.create(
-                    model=self.config.openai_model,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": "Send a test message with your joke to MQTT topic 'test/ai_joke'. Use the send_mqtt_message function."
-                        }
-                    ],
-                    tools=OPENAI_TOOLS,
+                    model=current_model,
+                    messages=messages,
+                    tools=tools_to_use,
                     tool_choice="auto",
-                    timeout=60,
+                    extra_body=extra_body,
                 )
 
                 message = response.choices[0].message
-                
+
                 if message.tool_calls:
                     for tool_call in message.tool_calls:
                         func_name = tool_call.function.name
@@ -691,7 +735,7 @@ class AiAgent:
                     tool_call_info = f"\n\nFunction calling test failed: {tool_err}"
 
             return True, (
-                f"Connected to {self.config.openai_api_base} using model {self.config.openai_model}\n\n"
+                f"Connected to {self.config.openai_api_base} using model {current_model}\n\n"
                 f"Joke: {joke}{tool_call_info}"
             )
 

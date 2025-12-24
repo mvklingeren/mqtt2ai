@@ -1,0 +1,542 @@
+"""Prompt Builder module for the MQTT AI Daemon.
+
+This module handles intelligent prompt construction with:
+- Smart MQTT message compression (deduplication with counts, aggregation)
+- Context-aware rule/pattern filtering based on trigger
+- Compact rulebook formatting
+"""
+
+import json
+import re
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
+from config import Config
+from knowledge_base import KnowledgeBase
+from trigger_analyzer import TriggerResult
+
+
+# Compact rulebook - core rules only, no verbose documentation
+COMPACT_RULEBOOK = """## Core Rules
+
+### Safety (CRITICAL - ACT IMMEDIATELY)
+- smoke:true → Activate siren, send emergency notification
+- water_leak:true → Activate siren, send emergency notification  
+- temperature > 50°C → Activate siren, send emergency notification
+
+### Security (when armed_home or armed_away)
+- Door/window opened (contact:false) → Activate siren + notification
+- Motion detected (occupancy:true) → Activate siren + notification
+
+### Pattern Learning (PRIMARY TASK)
+1. Look for trigger→action sequences (any sensor event followed by /set command)
+   - Examples: PIR occupancy:true → light ON, door contact:false → light ON, power spike → alert
+2. If delay is 0.5-30s, call record_pattern_observation with the TRIGGER VALUE that caused action
+   - Use the value that PRECEDED the action (e.g., occupancy:true, NOT occupancy:false)
+3. After 3+ observations, call create_rule
+4. DO NOT re-learn patterns that already have rules (check EXISTING RULES section)
+5. DO NOT send MQTT messages while learning - only record observations
+
+### Rule Execution
+- ONLY call send_mqtt_message when an ENABLED rule matches the CURRENT trigger
+- If rule is disabled [OFF], do not execute it
+
+### Undo Detection
+- If user reverses your action within 30s, call report_undo
+- After 3 undos, call reject_pattern
+"""
+
+
+@dataclass
+class MessageStats:
+    """Statistics for a deduplicated message."""
+    topic: str
+    payload: Dict[str, Any]
+    timestamp: str
+    count: int = 1
+    first_seen: Optional[str] = None
+    # For numeric fields, track min/max
+    numeric_ranges: Dict[str, Tuple[float, float]] = field(default_factory=dict)
+
+
+class PromptBuilder:
+    """Builds optimized prompts for AI analysis with intelligent compression."""
+
+    # Fields to remove from payloads (noise)
+    REMOVE_FIELDS = {
+        "linkquality", "voltage", "energy", "update", "update_available",
+        "child_lock", "countdown", "indicator_mode", "power_outage_memory",
+        "timestamp", "type", "wirelessNetwork", "wirelessSignal",
+        "firmwareStatus", "lastUpdate", "stream_Source", "still_Image_URL",
+        "installed_version", "latest_version",
+        "Time", "Uptime", "UptimeSec", "Vcc", "Heap",
+        "SleepMode", "Sleep", "LoadAvg", "MqttCount", "Hostname", "IPAddress",
+    }
+
+    # Numeric fields that can be aggregated with ranges
+    NUMERIC_FIELDS = {"power", "temperature", "humidity", "current", "illuminance"}
+
+    def __init__(self, config: Config):
+        self.config = config
+
+    def build(
+        self,
+        messages_snapshot: str,
+        kb: KnowledgeBase,
+        trigger_result: Optional[TriggerResult] = None,
+        trigger_reason: str = ""
+    ) -> str:
+        """Build an optimized prompt for AI analysis.
+        
+        Args:
+            messages_snapshot: Raw MQTT messages as newline-separated string
+            kb: KnowledgeBase with rules, patterns, and rulebook
+            trigger_result: Optional TriggerResult with trigger context
+            trigger_reason: Human-readable trigger reason string
+            
+        Returns:
+            Optimized prompt string
+        """
+        # Extract trigger topic from trigger_result or trigger_reason
+        trigger_topic = self._extract_trigger_topic(trigger_result, trigger_reason)
+
+        # Compress messages
+        compressed_messages = self._compress_messages(
+            messages_snapshot, trigger_topic
+        )
+
+        # Filter rules and patterns by relevance
+        relevant_rules = self._filter_relevant_rules(kb.learned_rules, trigger_topic)
+        relevant_patterns = self._filter_relevant_patterns(
+            kb.pending_patterns, trigger_topic
+        )
+        rejected_patterns = kb.rejected_patterns
+
+        # Build prompt sections
+        safety_alert = self._build_safety_alert(trigger_reason)
+        demo_instruction = self._build_demo_instruction()
+        rules_section = self._format_rules(relevant_rules, trigger_topic)
+        patterns_section = self._format_patterns(relevant_patterns)
+        rejected_section = self._format_rejected(rejected_patterns)
+
+        prompt = (
+            f"{safety_alert}"
+            f"You are a home automation AI with pattern learning. {demo_instruction}"
+            "Use send_mqtt_message tool for MQTT actions - no shell commands.\n\n"
+            f"{COMPACT_RULEBOOK}\n"
+            f"{rules_section}"
+            f"{patterns_section}"
+            f"{rejected_section}\n"
+            "## MQTT Messages (analyze for patterns):\n"
+            f"{compressed_messages}\n"
+        )
+
+        return prompt
+
+    def build_compact(
+        self,
+        messages_snapshot: str,
+        kb: KnowledgeBase,
+        trigger_result: Optional[TriggerResult] = None,
+        trigger_reason: str = ""
+    ) -> str:
+        """Build an extra-compact prompt for small context models.
+        
+        Targets ~2000 tokens for Ollama/Groq.
+        """
+        trigger_topic = self._extract_trigger_topic(trigger_result, trigger_reason)
+        
+        # More aggressive compression for compact mode
+        compressed_messages = self._compress_messages(
+            messages_snapshot, trigger_topic, max_lines=50, max_chars=4000
+        )
+
+        # Only include directly matching rules
+        relevant_rules = self._filter_relevant_rules(
+            kb.learned_rules, trigger_topic, strict=True
+        )
+
+        # Build minimal prompt
+        safety = ""
+        if any(x in trigger_reason.lower() for x in ["temperature", "smoke", "water", "leak"]):
+            safety = "SAFETY ALERT: Check for dangerous conditions!\n\n"
+
+        demo = self._build_demo_instruction()
+
+        rules_summary = ""
+        if relevant_rules:
+            rules_summary = "EXISTING RULES (DO NOT re-learn these):\n"
+            for rule in relevant_rules[:5]:
+                trigger = rule.get("trigger", {})
+                action = rule.get("action", {})
+                enabled = "ON" if rule.get("enabled", True) else "OFF"
+                rules_summary += (
+                    f"- [{enabled}] {rule.get('id', '?')}: "
+                    f"{trigger.get('topic', '?')}[{trigger.get('field', '?')}="
+                    f"{trigger.get('value', '?')}] → {action.get('topic', '?')}\n"
+                )
+
+        prompt = f"""{safety}{demo}Analyze MQTT for automation patterns.
+
+{rules_summary}
+Messages:
+{compressed_messages}
+
+Tasks (in order):
+1. LEARN: If trigger event followed by /set action within 30s → record_pattern_observation
+   - Use the trigger VALUE that CAUSED the action (e.g., occupancy:true, NOT false)
+   - Skip if rule already exists for this trigger→action
+   - DO NOT send any MQTT messages during learning
+2. EXECUTE: ONLY if an ENABLED rule matches the CURRENT trigger → send_mqtt_message
+3. CREATE: After 3+ observations of same pattern → create_rule
+"""
+        return prompt
+
+    def _extract_trigger_topic(
+        self,
+        trigger_result: Optional[TriggerResult],
+        trigger_reason: str
+    ) -> Optional[str]:
+        """Extract the triggering topic from context."""
+        # TriggerResult doesn't have topic directly, extract from reason
+        # Format: "State field 'occupancy' changed" or similar
+        # We need to match against message buffer to find the topic
+        
+        # Try to extract from trigger_reason string
+        # Common formats: "topic: zigbee2mqtt/xxx" or just the topic name
+        if "topic:" in trigger_reason.lower():
+            match = re.search(r'topic:\s*(\S+)', trigger_reason, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        
+        # Look for zigbee2mqtt or similar patterns
+        match = re.search(r'(zigbee2mqtt/\S+|homie/\S+|ring/\S+)', trigger_reason)
+        if match:
+            return match.group(1)
+            
+        return None
+
+    def _compress_messages(
+        self,
+        messages_snapshot: str,
+        trigger_topic: Optional[str],
+        max_lines: int = 100,
+        max_chars: int = 8000
+    ) -> str:
+        """Compress MQTT messages with deduplication and counts.
+        
+        Args:
+            messages_snapshot: Raw messages as newline-separated string
+            trigger_topic: Topic that triggered analysis (prioritized)
+            max_lines: Maximum lines in output
+            max_chars: Maximum characters in output
+            
+        Returns:
+            Compressed messages string
+        """
+        lines = messages_snapshot.strip().split('\n')
+        if not lines:
+            return ""
+
+        # Parse messages and track by topic
+        topic_stats: Dict[str, MessageStats] = {}
+        trigger_messages: List[str] = []
+        omitted_count = 0
+
+        for line in lines:
+            if not line.strip():
+                continue
+
+            parsed = self._parse_message_line(line)
+            if not parsed:
+                continue
+
+            timestamp, topic, payload = parsed
+
+            # Check if this is the trigger topic - always keep
+            if trigger_topic and topic == trigger_topic:
+                trigger_messages.append(
+                    f"[{timestamp}] {topic} {self._format_payload(payload)} (TRIGGER)"
+                )
+                continue
+
+            # Deduplicate by topic
+            if topic in topic_stats:
+                stats = topic_stats[topic]
+                stats.count += 1
+                stats.timestamp = timestamp  # Update to latest
+                stats.payload = payload  # Update to latest payload
+                
+                # Track numeric ranges
+                for field_name in self.NUMERIC_FIELDS:
+                    if field_name in payload:
+                        try:
+                            val = float(payload[field_name])
+                            if field_name in stats.numeric_ranges:
+                                min_val, max_val = stats.numeric_ranges[field_name]
+                                stats.numeric_ranges[field_name] = (
+                                    min(min_val, val), max(max_val, val)
+                                )
+                            else:
+                                stats.numeric_ranges[field_name] = (val, val)
+                        except (TypeError, ValueError):
+                            pass
+            else:
+                topic_stats[topic] = MessageStats(
+                    topic=topic,
+                    payload=payload,
+                    timestamp=timestamp,
+                    first_seen=timestamp
+                )
+
+        # Build output
+        output_lines = []
+
+        # Trigger messages first
+        output_lines.extend(trigger_messages)
+
+        # Then deduplicated messages sorted by timestamp (most recent first)
+        sorted_stats = sorted(
+            topic_stats.values(),
+            key=lambda s: s.timestamp,
+            reverse=True
+        )
+
+        for stats in sorted_stats:
+            if len(output_lines) >= max_lines:
+                omitted_count += 1
+                continue
+
+            line = self._format_stats_line(stats)
+            output_lines.append(line)
+
+        # Add omitted count if any
+        if omitted_count > 0:
+            output_lines.append(f"--- {omitted_count} topics omitted ---")
+
+        result = '\n'.join(output_lines)
+        
+        # Truncate to max chars if needed
+        if len(result) > max_chars:
+            result = result[:max_chars] + "\n... (truncated)"
+
+        return result
+
+    def _parse_message_line(
+        self, line: str
+    ) -> Optional[Tuple[str, str, Dict[str, Any]]]:
+        """Parse a message line into (timestamp, topic, payload).
+        
+        Expected format: [HH:MM:SS] topic/path {"key": "value"}
+        """
+        try:
+            # Extract timestamp
+            ts_match = re.match(r'\[(\d{2}:\d{2}:\d{2})\]\s*', line)
+            if not ts_match:
+                return None
+            
+            timestamp = ts_match.group(1)
+            rest = line[ts_match.end():]
+
+            # Find JSON start
+            json_start = rest.find('{')
+            if json_start == -1:
+                # No JSON payload
+                topic = rest.strip()
+                return timestamp, topic, {}
+
+            topic = rest[:json_start].strip()
+            json_str = rest[json_start:]
+
+            # Parse and filter JSON
+            payload = json.loads(json_str)
+            if isinstance(payload, dict):
+                # Remove noise fields
+                payload = {
+                    k: v for k, v in payload.items()
+                    if k not in self.REMOVE_FIELDS
+                    and v is not None
+                    and not isinstance(v, dict)
+                }
+
+            return timestamp, topic, payload
+
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    def _format_payload(self, payload: Dict[str, Any]) -> str:
+        """Format payload as compact key:value string."""
+        if not payload:
+            return "{}"
+        parts = [f"{k}:{json.dumps(v)}" for k, v in payload.items()]
+        return " ".join(parts)
+
+    def _format_stats_line(self, stats: MessageStats) -> str:
+        """Format a MessageStats as a compressed line."""
+        payload_str = self._format_payload(stats.payload)
+        
+        # Add count suffix if > 1
+        count_suffix = f" ({stats.count}x)" if stats.count > 1 else ""
+        
+        # Add range info for numeric fields if significantly different
+        range_info = ""
+        for field_name, (min_val, max_val) in stats.numeric_ranges.items():
+            if max_val - min_val > 1:  # Only show if meaningful range
+                range_info += f" range:{min_val:.0f}-{max_val:.0f}"
+
+        return f"[{stats.timestamp}] {stats.topic} {payload_str}{count_suffix}{range_info}"
+
+    def _filter_relevant_rules(
+        self,
+        learned_rules: Dict[str, Any],
+        trigger_topic: Optional[str],
+        strict: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Filter rules to those relevant to the trigger.
+        
+        Args:
+            learned_rules: Full learned rules dict
+            trigger_topic: Topic that triggered analysis
+            strict: If True, only exact matches; if False, also include recent rules
+            
+        Returns:
+            List of relevant rule dicts
+        """
+        rules = learned_rules.get("rules", [])
+        if not rules:
+            return []
+
+        relevant = []
+        other = []
+        now = datetime.now()
+
+        for rule in rules:
+            if not rule.get("enabled", True):
+                continue
+
+            rule_trigger_topic = rule.get("trigger", {}).get("topic", "")
+            
+            # Check if matches trigger topic
+            if trigger_topic and rule_trigger_topic == trigger_topic:
+                relevant.append(rule)
+                continue
+
+            # Check if recently triggered (within 5 minutes)
+            if not strict:
+                last_triggered = rule.get("confidence", {}).get("last_triggered")
+                if last_triggered:
+                    try:
+                        triggered_dt = datetime.fromisoformat(last_triggered)
+                        if (now - triggered_dt).total_seconds() < 300:
+                            relevant.append(rule)
+                            continue
+                    except ValueError:
+                        pass
+
+            other.append(rule)
+
+        # If we have relevant rules, return them
+        # Otherwise, return all enabled rules
+        if relevant:
+            return relevant
+        
+        # Return all enabled rules if no specific matches (other list has enabled rules)
+        return other if not strict else []
+
+    def _filter_relevant_patterns(
+        self,
+        pending_patterns: Dict[str, Any],
+        trigger_topic: Optional[str]
+    ) -> List[Dict[str, Any]]:
+        """Filter patterns to those relevant to the trigger."""
+        patterns = pending_patterns.get("patterns", [])
+        if not patterns:
+            return []
+
+        relevant = []
+        for pattern in patterns:
+            pattern_trigger = pattern.get("trigger_topic", "")
+            
+            # Include if matches trigger topic or is being actively tracked
+            if trigger_topic and pattern_trigger == trigger_topic:
+                relevant.append(pattern)
+            elif len(pattern.get("observations", [])) >= 2:
+                # Include patterns close to becoming rules
+                relevant.append(pattern)
+
+        return relevant
+
+    def _format_rules(
+        self,
+        rules: List[Dict[str, Any]],
+        trigger_topic: Optional[str]
+    ) -> str:
+        """Format rules section for prompt."""
+        if not rules:
+            return "\n## Learned Rules: None yet.\n"
+
+        lines = ["\n## Learned Rules (execute when triggers match):"]
+        for rule in rules:
+            rule_id = rule.get("id", "unknown")
+            trigger = rule.get("trigger", {})
+            action = rule.get("action", {})
+            occurrences = rule.get("confidence", {}).get("occurrences", 0)
+            
+            # Mark if this matches the current trigger
+            marker = " ← MATCHES" if trigger_topic and trigger.get("topic") == trigger_topic else ""
+            
+            lines.append(
+                f"- {rule_id}: {trigger.get('topic')} "
+                f"[{trigger.get('field')}={trigger.get('value')}] "
+                f"→ {action.get('topic')} ({occurrences} triggers){marker}"
+            )
+
+        return '\n'.join(lines) + '\n'
+
+    def _format_patterns(self, patterns: List[Dict[str, Any]]) -> str:
+        """Format pending patterns section for prompt."""
+        if not patterns:
+            return ""
+
+        lines = ["\n## Pending Patterns (close to becoming rules):"]
+        for pattern in patterns:
+            obs_count = len(pattern.get("observations", []))
+            lines.append(
+                f"- {pattern.get('trigger_topic')} [{pattern.get('trigger_field')}] "
+                f"→ {pattern.get('action_topic')} ({obs_count}/3 observations)"
+            )
+
+        return '\n'.join(lines) + '\n'
+
+    def _format_rejected(self, rejected: Dict[str, Any]) -> str:
+        """Format rejected patterns section."""
+        patterns = rejected.get("patterns", [])
+        if not patterns:
+            return ""
+
+        lines = ["\n## Rejected Patterns (DO NOT learn):"]
+        for pattern in patterns[:5]:  # Limit to 5
+            lines.append(
+                f"- {pattern.get('trigger_topic')} → {pattern.get('action_topic')}"
+            )
+
+        return '\n'.join(lines) + '\n'
+
+    def _build_safety_alert(self, trigger_reason: str) -> str:
+        """Build safety alert section if applicable."""
+        trigger_lower = trigger_reason.lower()
+        if any(x in trigger_lower for x in ["temperature", "smoke", "water", "leak"]):
+            return (
+                "**SAFETY ALERT**: Potential safety event detected. "
+                "Check for smoke:true, water_leak:true, or temperature>50C "
+                "and ACT IMMEDIATELY if found.\n\n"
+            )
+        return ""
+
+    def _build_demo_instruction(self) -> str:
+        """Build demo mode instruction."""
+        if self.config.demo_mode:
+            return "**Demo mode ENABLED - send a joke to jokes/ topic.** "
+        return ""
+

@@ -1,0 +1,30 @@
+{
+  "name": "Door Sensor Pattern Test",
+  "description": "Simulates front door opening followed by hallway light activation. Tests contact sensor state field triggers.",
+  "variables": {
+    "user_delay": 3,
+    "door_open_duration": 5,
+    "between_events": 60
+  },
+  "messages": [
+    {"_comment": "=== First occurrence: Door opens, user turns on light ==="},
+    {"topic": "zigbee2mqtt/front_door", "payload": {"contact": false, "battery": 95, "linkquality": 100}, "delay": 0},
+    {"topic": "zigbee2mqtt/hallway_light/set", "payload": {"state": "ON"}, "delay": "{{user_delay}}"},
+    {"topic": "zigbee2mqtt/hallway_light", "payload": {"state": "ON", "brightness": 254}, "delay": 0.1},
+    {"topic": "zigbee2mqtt/front_door", "payload": {"contact": true, "battery": 95, "linkquality": 100}, "delay": "{{door_open_duration}}"},
+    
+    {"_comment": "=== Second occurrence ==="},
+    {"topic": "zigbee2mqtt/front_door", "payload": {"contact": false, "battery": 95, "linkquality": 98}, "delay": "{{between_events}}"},
+    {"topic": "zigbee2mqtt/hallway_light/set", "payload": {"state": "ON"}, "delay": "{{user_delay}}"},
+    {"topic": "zigbee2mqtt/hallway_light", "payload": {"state": "ON", "brightness": 254}, "delay": 0.1},
+    {"topic": "zigbee2mqtt/front_door", "payload": {"contact": true, "battery": 95, "linkquality": 98}, "delay": "{{door_open_duration}}"},
+    
+    {"_comment": "=== Third occurrence - pattern should be learned ==="},
+    {"topic": "zigbee2mqtt/front_door", "payload": {"contact": false, "battery": 94, "linkquality": 102}, "delay": "{{between_events}}"},
+    {"topic": "zigbee2mqtt/hallway_light/set", "payload": {"state": "ON"}, "delay": "{{user_delay}}"},
+    {"topic": "zigbee2mqtt/hallway_light", "payload": {"state": "ON", "brightness": 254}, "delay": 0.1},
+    {"topic": "zigbee2mqtt/front_door", "payload": {"contact": true, "battery": 94, "linkquality": 102}, "delay": "{{door_open_duration}}"}
+  ],
+  "speed_multiplier": 10
+}
+
