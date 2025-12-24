@@ -1,7 +1,7 @@
 """AI Agent module for the MQTT AI Daemon.
 
 This module handles interaction with AI CLI tools (Gemini, Claude, or Codex)
-or OpenAI-compatible APIs (Ollama, LM Studio, etc.) for analyzing MQTT 
+or OpenAI-compatible APIs (Ollama, LM Studio, etc.) for analyzing MQTT
 messages and making automation decisions.
 """
 import subprocess
@@ -9,6 +9,8 @@ import shutil
 import json
 import logging
 import time
+import os
+import hashlib
 from datetime import datetime
 
 try:
@@ -20,6 +22,54 @@ except ImportError:
 from config import Config
 from knowledge_base import KnowledgeBase
 from prompt_builder import PromptBuilder
+
+
+def write_debug_output(debug_dir: str, url: str, body: dict, response: dict = None):
+    """Write HTTP call details to a debug file with short hash filename.
+
+    Args:
+        debug_dir: Directory to write debug files to
+        url: The API URL being called
+        body: The request body (dict)
+        response: Optional response data (dict)
+    """
+    # Create debug directory if it doesn't exist
+    os.makedirs(debug_dir, exist_ok=True)
+
+    # Generate short hash for filename
+    timestamp = datetime.now().isoformat()
+    hash_input = f"{timestamp}-{url}".encode()
+    short_hash = hashlib.md5(hash_input).hexdigest()[:8]
+    filename = os.path.join(debug_dir, f"{short_hash}.txt")
+
+    # Calculate content length
+    body_json = json.dumps(body, indent=2)
+    content_length = len(body_json.encode('utf-8'))
+
+    # Build debug output
+    output_lines = [
+        f"=== HTTP Request Debug ===",
+        f"Timestamp: {timestamp}",
+        f"URL: {url}",
+        f"Content-Length: {content_length}",
+        f"",
+        f"=== Request Body ===",
+        body_json,
+    ]
+
+    if response:
+        response_json = json.dumps(response, indent=2)
+        output_lines.extend([
+            f"",
+            f"=== Response ===",
+            response_json,
+        ])
+
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(output_lines))
+
+    logging.debug("Debug output written to %s", filename)
+
 
 # Import MCP tool implementations for OpenAI function calling
 # pylint: disable=import-outside-toplevel
@@ -516,6 +566,39 @@ class AiAgent:
                         raise
 
                 message = response.choices[0].message
+
+                # Write debug output if enabled
+                if self.config.debug_output:
+                    request_body = {
+                        "model": current_model,
+                        "messages": messages,
+                    }
+                    if use_tools:
+                        request_body["tools"] = tools_to_use
+                        request_body["tool_choice"] = "auto"
+                    if extra_body:
+                        request_body["extra_body"] = extra_body
+                    response_data = {
+                        "choices": [{"message": {
+                            "role": message.role,
+                            "content": message.content,
+                            "tool_calls": [
+                                {"id": tc.id, "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                                for tc in (message.tool_calls or [])
+                            ] if message.tool_calls else None
+                        }}],
+                        "usage": {
+                            "prompt_tokens": response.usage.prompt_tokens if response.usage else None,
+                            "completion_tokens": response.usage.completion_tokens if response.usage else None,
+                            "total_tokens": response.usage.total_tokens if response.usage else None,
+                        } if response.usage else None
+                    }
+                    write_debug_output(
+                        self.config.debug_output_dir,
+                        f"{self.config.openai_api_base}/chat/completions",
+                        request_body,
+                        response_data
+                    )
 
                 # Track token usage if available
                 if response.usage:

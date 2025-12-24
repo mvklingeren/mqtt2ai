@@ -112,6 +112,10 @@ class Config:  # pylint: disable=too-many-instance-attributes
     simulation_file: Optional[str] = None  # Path to simulation scenario JSON file
     simulation_speed: Optional[float] = None  # Override speed multiplier for simulation
 
+    # Debug mode - write HTTP call details to files
+    debug_output: bool = False
+    debug_output_dir: str = "debug-output"
+
     @classmethod
     def from_args(cls) -> 'Config':
         """Parse command-line arguments and return a Config instance."""
@@ -241,6 +245,11 @@ class Config:  # pylint: disable=too-many-instance-attributes
             metavar="MULTIPLIER",
             help="Override speed multiplier for simulation (e.g., 10 = 10x faster)"
         )
+        parser.add_argument(
+            "--debug",
+            action="store_true",
+            help="Write HTTP call details (URL, body, content-length) to debug-output/ directory"
+        )
 
         args = parser.parse_args()
 
@@ -269,4 +278,5 @@ class Config:  # pylint: disable=too-many-instance-attributes
         c.disable_new_rules = args.disable_new_rules
         c.simulation_file = args.simulation
         c.simulation_speed = args.simulation_speed
+        c.debug_output = args.debug
         return c
