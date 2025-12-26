@@ -7,12 +7,13 @@ to publish messages directly to MQTT topics, as well as tools for
 managing learned automation rules.
 """
 
+import atexit
 import json
-import subprocess
 from datetime import datetime
 from mcp.server.fastmcp import FastMCP
 
 from config import Config
+from mqtt_client import MqttClient
 from utils import load_json_file, save_json_file
 
 # Rules files
@@ -23,8 +24,12 @@ REJECTED_PATTERNS_FILE = "rejected_patterns.json"
 # Initialize MCP server
 mcp = FastMCP("mqtt-tools")
 
-# Load config
+# Load config and initialize MQTT client with persistent connection
 config = Config()
+mqtt_client = MqttClient(config)
+
+# Register cleanup on exit
+atexit.register(mqtt_client.disconnect)
 
 
 @mcp.tool()
@@ -39,21 +44,10 @@ def send_mqtt_message(topic: str, payload: str) -> str:
     Returns:
         A confirmation message indicating success or failure
     """
-    try:
-        subprocess.run(
-            [
-                "mosquitto_pub", "-h", config.mqtt_host, "-p", config.mqtt_port,
-                "-t", topic, "-m", payload
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+    if mqtt_client.publish(topic, payload):
         return f"Successfully sent message to topic '{topic}'"
-    except FileNotFoundError:
-        return "Error: 'mosquitto_pub' command not found. Please install mosquitto-clients."
-    except subprocess.CalledProcessError as e:
-        return f"Error sending MQTT message: {e.stderr}"
+    else:
+        return "Error: Failed to send MQTT message. Check connection to broker."
 
 
 @mcp.tool()

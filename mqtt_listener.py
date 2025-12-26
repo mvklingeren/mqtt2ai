@@ -10,37 +10,62 @@ import os
 import threading
 import time
 import json
+from typing import Optional
+
+import paho.mqtt.client as mqtt
 
 # --- Configuration ---
 MAX_MESSAGES = 100
 MQTT_HOST = "192.168.1.245"
-MQTT_PORT = "1883"
+MQTT_PORT = 1883
 MQTT_TOPIC = "zigbee2mqtt/#"
 RULEBOOK_FILE = "rulebook.md"
 GEMINI_CLI_COMMAND = "/opt/homebrew/bin/gemini"
 CHECK_INTERVAL_SECONDS = 10
 
+# Module-level MQTT client for publishing
+_mqtt_client: Optional[mqtt.Client] = None
+
+
+def _get_mqtt_client() -> Optional[mqtt.Client]:
+    """Get or create the module-level MQTT client for publishing."""
+    global _mqtt_client
+    
+    if _mqtt_client is not None:
+        return _mqtt_client
+    
+    try:
+        client = mqtt.Client(
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+            protocol=mqtt.MQTTv311
+        )
+        client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
+        client.loop_start()
+        _mqtt_client = client
+        return client
+    except Exception as e:
+        print(f"Error connecting to MQTT broker: {e}", file=sys.stderr)
+        return None
+
 
 def send_mqtt_message(topic, payload):
-    """Publish a generic message to a specified MQTT topic."""
+    """Publish a generic message to a specified MQTT topic using paho-mqtt."""
     print(f"  -> Sending MQTT: Topic='{topic}', Payload='{payload}'")
+    
     try:
-        subprocess.run(
-            [
-                "mosquitto_pub",
-                "-h", MQTT_HOST,
-                "-p", MQTT_PORT,
-                "-t", topic,
-                "-m", payload,
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError:
-        print("Error: 'mosquitto_pub' command not found.", file=sys.stderr)
-    except subprocess.CalledProcessError as e:
-        print(f"Error sending MQTT message: {e.stderr}", file=sys.stderr)
+        client = _get_mqtt_client()
+        if client is None:
+            print("Error: Could not connect to MQTT broker.", file=sys.stderr)
+            return
+        
+        result = client.publish(topic, payload, qos=1)
+        result.wait_for_publish(timeout=5.0)
+        
+        if result.rc != mqtt.MQTT_ERR_SUCCESS:
+            print(f"Error publishing MQTT: rc={result.rc}", file=sys.stderr)
+            
+    except Exception as e:
+        print(f"Error sending MQTT message: {e}", file=sys.stderr)
 
 
 def check_for_alarms(messages, rulebook_content):
@@ -140,7 +165,8 @@ def listen_to_mqtt():
     last_check_time = time.time()
 
     mqtt_command = [
-        "mosquitto_sub", "-h", MQTT_HOST, "-p", MQTT_PORT, "-t", MQTT_TOPIC, "-v",
+        "mosquitto_sub", "-h", MQTT_HOST, "-p", str(MQTT_PORT),
+        "-t", MQTT_TOPIC, "-v",
     ]
 
     try:

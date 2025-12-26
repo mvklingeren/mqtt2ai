@@ -399,6 +399,13 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             self.config.device_track_pattern
         )
 
+        # Connect MQTT client for publishing (persistent connection)
+        if not self.mqtt.connect():
+            logging.warning(
+                "Failed to connect MQTT client for publishing. "
+                "Will retry on first publish."
+            )
+
         # Start AI worker thread (processes AI requests asynchronously)
         if not self.config.no_ai:
             self.ai_thread = threading.Thread(
@@ -615,6 +622,9 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             self.ai_thread.join(timeout=5.0)
             if self.ai_thread.is_alive():
                 logging.warning("AI worker thread did not stop in time")
+
+        # Disconnect MQTT client
+        self.mqtt.disconnect()
 
         logging.info("Daemon shutdown complete")
 

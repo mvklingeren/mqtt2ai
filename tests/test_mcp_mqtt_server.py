@@ -1,7 +1,6 @@
 """Tests for the MCP MQTT Server module."""
 import json
 import os
-import subprocess
 import sys
 from datetime import datetime
 from unittest.mock import patch, MagicMock
@@ -10,7 +9,16 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import the functions we want to test
+
+@pytest.fixture(autouse=True)
+def mock_mqtt_client():
+    """Mock the MqttClient used by mcp_mqtt_server."""
+    with patch("mcp_mqtt_server.mqtt_client") as mock_client:
+        mock_client.publish.return_value = True
+        yield mock_client
+
+
+# Import the functions we want to test (after setting up mocks)
 from mcp_mqtt_server import (
     send_mqtt_message,
     create_rule,
@@ -55,49 +63,37 @@ def mock_files(temp_dir, monkeypatch):
 class TestSendMqttMessage:
     """Tests for send_mqtt_message function."""
 
-    def test_send_mqtt_message_success(self, mock_subprocess_run):
+    def test_send_mqtt_message_success(self, mock_mqtt_client):
         """Test successful MQTT message send."""
+        mock_mqtt_client.publish.return_value = True
         result = send_mqtt_message("test/topic", '{"state": "ON"}')
 
         assert "Successfully" in result
-        mock_subprocess_run.assert_called_once()
+        mock_mqtt_client.publish.assert_called_once()
 
-    def test_send_mqtt_message_correct_topic(self, mock_subprocess_run):
+    def test_send_mqtt_message_correct_topic(self, mock_mqtt_client):
         """Test that correct topic is used."""
+        mock_mqtt_client.publish.return_value = True
         send_mqtt_message("zigbee2mqtt/light/set", '{"state": "ON"}')
 
-        call_args = mock_subprocess_run.call_args[0][0]
-        assert "-t" in call_args
-        topic_idx = call_args.index("-t") + 1
-        assert call_args[topic_idx] == "zigbee2mqtt/light/set"
+        call_args = mock_mqtt_client.publish.call_args[0]
+        assert call_args[0] == "zigbee2mqtt/light/set"
 
-    def test_send_mqtt_message_correct_payload(self, mock_subprocess_run):
+    def test_send_mqtt_message_correct_payload(self, mock_mqtt_client):
         """Test that correct payload is used."""
+        mock_mqtt_client.publish.return_value = True
         payload = '{"state": "ON", "brightness": 100}'
         send_mqtt_message("test/topic", payload)
 
-        call_args = mock_subprocess_run.call_args[0][0]
-        assert "-m" in call_args
-        msg_idx = call_args.index("-m") + 1
-        assert call_args[msg_idx] == payload
+        call_args = mock_mqtt_client.publish.call_args[0]
+        assert call_args[1] == payload
 
-    def test_send_mqtt_message_not_found(self):
-        """Test handling when mosquitto_pub not found."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = FileNotFoundError()
-            result = send_mqtt_message("test/topic", '{"state": "ON"}')
+    def test_send_mqtt_message_failure(self, mock_mqtt_client):
+        """Test handling when publish fails."""
+        mock_mqtt_client.publish.return_value = False
+        result = send_mqtt_message("test/topic", '{"state": "ON"}')
 
-            assert "not found" in result.lower()
-
-    def test_send_mqtt_message_subprocess_error(self):
-        """Test handling subprocess errors."""
-        with patch("subprocess.run") as mock_run:
-            error = subprocess.CalledProcessError(1, "mosquitto_pub")
-            error.stderr = "Connection refused"
-            mock_run.side_effect = error
-            result = send_mqtt_message("test/topic", '{"state": "ON"}')
-
-            assert "Error" in result
+        assert "Error" in result or "Failed" in result
 
 
 class TestCreateRule:
@@ -143,8 +139,8 @@ class TestCreateRule:
         assert data["rules"][0]["trigger"]["value"] is True
 
     def test_update_existing_rule(self, mock_files):
-        """Test updating an existing rule."""
-        # Create initial rule
+        """Test updating an existing rule with different trigger value."""
+        # Create initial rule with trigger_value="true"
         create_rule(
             rule_id="test_rule",
             trigger_topic="zigbee2mqtt/pir",
@@ -156,14 +152,15 @@ class TestCreateRule:
             tolerance_seconds=1.0
         )
 
-        # Update the same rule
+        # Update the same rule with a different trigger value
+        # Note: same trigger value would return "already exists"
         result = create_rule(
             rule_id="test_rule",
             trigger_topic="zigbee2mqtt/pir",
             trigger_field="occupancy",
-            trigger_value="true",
+            trigger_value="false",  # Different value triggers update
             action_topic="zigbee2mqtt/light/set",
-            action_payload='{"state": "ON"}',
+            action_payload='{"state": "OFF"}',
             avg_delay_seconds=3.0,
             tolerance_seconds=1.5
         )

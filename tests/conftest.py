@@ -132,7 +132,11 @@ def sample_mqtt_messages():
 
 @pytest.fixture
 def mock_subprocess_run():
-    """Mock subprocess.run for testing external commands."""
+    """Mock subprocess.run for testing external commands.
+    
+    Note: This is still used by some legacy code paths, but most MQTT
+    publishing now uses paho-mqtt instead of subprocess.
+    """
     with patch("subprocess.run") as mock:
         mock.return_value = MagicMock(
             returncode=0,
@@ -144,7 +148,10 @@ def mock_subprocess_run():
 
 @pytest.fixture
 def mock_subprocess_popen():
-    """Mock subprocess.Popen for testing process spawning."""
+    """Mock subprocess.Popen for testing process spawning.
+    
+    Used for mosquitto_sub listener process which still uses subprocess.
+    """
     with patch("subprocess.Popen") as mock:
         process_mock = MagicMock()
         process_mock.stdout = iter([])
