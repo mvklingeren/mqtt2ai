@@ -15,10 +15,6 @@ from mcp.server.fastmcp import FastMCP
 from config import Config
 from utils import load_json_file, save_json_file
 
-# MQTT Configuration
-MQTT_HOST = "192.168.1.245"
-MQTT_PORT = "1883"
-
 # Rules files
 LEARNED_RULES_FILE = "learned_rules.json"
 PENDING_PATTERNS_FILE = "pending_patterns.json"
@@ -46,7 +42,7 @@ def send_mqtt_message(topic: str, payload: str) -> str:
     try:
         subprocess.run(
             [
-                "mosquitto_pub", "-h", MQTT_HOST, "-p", MQTT_PORT,
+                "mosquitto_pub", "-h", config.mqtt_host, "-p", config.mqtt_port,
                 "-t", topic, "-m", payload
             ],
             check=True,

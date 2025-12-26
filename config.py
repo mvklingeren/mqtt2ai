@@ -29,8 +29,8 @@ DEFAULT_OPENAI_MODELS = [
 class Config:  # pylint: disable=too-many-instance-attributes
     """Configuration settings for the MQTT AI Daemon."""
 
-    mqtt_host: str = "192.168.1.245"
-    mqtt_port: str = "1883"
+    mqtt_host: str = field(default_factory=lambda: os.environ.get("MQTT_HOST", "192.168.1.245"))
+    mqtt_port: str = field(default_factory=lambda: os.environ.get("MQTT_PORT", "1883"))
     mqtt_topics: List[str] = field(
         default_factory=lambda: [
             "zigbee2mqtt/#",
