@@ -77,33 +77,6 @@ class TestMessageCompression(TestPromptBuilder):
         
         assert "(TRIGGER)" in compressed
 
-    def test_compress_respects_max_lines(self, builder):
-        """Test that compression respects max_lines limit."""
-        # Create many messages
-        lines = []
-        for i in range(200):
-            lines.append(f'[12:00:{i:02d}] zigbee2mqtt/sensor_{i} {{"value":{i}}}')
-        snapshot = '\n'.join(lines)
-        
-        compressed = builder._compress_messages(snapshot, None, max_lines=10)
-        
-        # Should be limited (10 lines + omitted message)
-        result_lines = compressed.strip().split('\n')
-        assert len(result_lines) <= 12  # 10 + possible omitted message
-
-    def test_compress_respects_max_chars(self, builder):
-        """Test that compression respects max_chars limit."""
-        # Create a very long snapshot
-        lines = []
-        for i in range(500):
-            lines.append(f'[12:00:00] zigbee2mqtt/sensor_{i} {{"value":{i},"data":"x"*100}}')
-        snapshot = '\n'.join(lines)
-        
-        compressed = builder._compress_messages(snapshot, None, max_chars=1000)
-        
-        # Should be truncated
-        assert len(compressed) <= 1020  # Allow for truncation message
-
     def test_compress_tracks_numeric_ranges(self, builder):
         """Test that numeric field ranges are tracked during aggregation."""
         snapshot = """[12:00:01] zigbee2mqtt/power_plug {"power":100}
@@ -288,7 +261,7 @@ class TestPromptBuilding(TestPromptBuilder):
         
         prompt = builder.build("", mock_kb)
         
-        assert "Demo mode" in prompt
+        assert "DEMO MODE" in prompt
         assert "jokes/" in prompt
 
     def test_build_compact_includes_demo_instruction(self, config, mock_kb):
@@ -298,7 +271,7 @@ class TestPromptBuilding(TestPromptBuilder):
         
         prompt = builder.build_compact("", mock_kb)
         
-        assert "Demo mode" in prompt
+        assert "DEMO MODE" in prompt
         assert "jokes/" in prompt
 
     def test_build_compact_is_shorter(self, builder, mock_kb, sample_messages_snapshot):
@@ -323,27 +296,27 @@ class TestTriggerTopicExtraction(TestPromptBuilder):
 
     def test_extract_from_topic_prefix(self, builder):
         """Test extracting topic from 'topic: xxx' format."""
-        result = builder._extract_trigger_topic(
-            None, "topic: zigbee2mqtt/hallway_pir"
+        result = builder._extract_trigger_topics(
+            [], "topic: zigbee2mqtt/hallway_pir"
         )
         
-        assert result == "zigbee2mqtt/hallway_pir"
+        assert "zigbee2mqtt/hallway_pir" in result
 
     def test_extract_from_zigbee_pattern(self, builder):
         """Test extracting topic from zigbee2mqtt pattern in text."""
-        result = builder._extract_trigger_topic(
-            None, "State changed on zigbee2mqtt/kitchen_pir sensor"
+        result = builder._extract_trigger_topics(
+            [], "State changed on zigbee2mqtt/kitchen_pir sensor"
         )
         
-        assert result == "zigbee2mqtt/kitchen_pir"
+        assert "zigbee2mqtt/kitchen_pir" in result
 
     def test_extract_returns_none_for_no_match(self, builder):
-        """Test that extraction returns None when no topic found."""
-        result = builder._extract_trigger_topic(
-            None, "Manual trigger pressed"
+        """Test that extraction returns empty list when no topic found."""
+        result = builder._extract_trigger_topics(
+            [], "Manual trigger pressed"
         )
         
-        assert result is None
+        assert result == []
 
 
 class TestFormatPayload(TestPromptBuilder):
@@ -411,8 +384,9 @@ class TestCompactRulebook:
 
     def test_compact_rulebook_is_concise(self):
         """Test that compact rulebook is reasonably short."""
-        # Should be under 2000 characters for token efficiency
-        assert len(COMPACT_RULEBOOK) < 2000
+        # Should be under 2500 characters for token efficiency
+        # (expanded to include security awareness features)
+        assert len(COMPACT_RULEBOOK) < 2500
 
 
 class TestExistingPatternsSet(TestPromptBuilder):

@@ -25,6 +25,7 @@ from mqtt_simulator import MqttSimulator
 from ai_agent import AiAgent, set_alert_agent
 from trigger_analyzer import TriggerAnalyzer, TriggerResult
 from event_bus import event_bus, EventType
+from context import RuntimeContext, set_context
 import tools
 
 VERSION = "0.2"
@@ -43,12 +44,17 @@ class AiRequest:
     """Represents a request for AI analysis."""
     snapshot: str
     reason: str
-    trigger_result: Optional[TriggerResult] = None
+    trigger_results: list[TriggerResult] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
 
     def is_expired(self, max_age_seconds: float = 30.0) -> bool:
         """Check if this request is too old to be relevant."""
         return (time.time() - self.created_at) > max_age_seconds
+    
+    @property
+    def trigger_result(self) -> Optional[TriggerResult]:
+        """Backwards-compatible accessor for the first trigger result."""
+        return self.trigger_results[0] if self.trigger_results else None
 
 
 import fnmatch
@@ -397,7 +403,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             simulation_mode=bool(config.simulation_file)
         )
         
-        # Inject MQTT client and config into tools module
+        # Inject MQTT client and config into tools module (legacy support)
         tools.set_mqtt_client(self.mqtt)
         tools.set_disable_new_rules(config.disable_new_rules)
         
@@ -406,10 +412,20 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         
         # Device state tracker for alert system context
         self.device_tracker = DeviceStateTracker(config.device_track_pattern)
-        set_device_tracker(self.device_tracker)  # Make globally accessible
+        set_device_tracker(self.device_tracker)  # Make globally accessible (legacy)
         
-        # Set up alert agent for raise_alert() function
+        # Set up alert agent for raise_alert() function (legacy)
         set_alert_agent(self.ai, config)
+        
+        # Create and set RuntimeContext for dependency injection
+        # This is the preferred way to access shared dependencies
+        self.runtime_context = RuntimeContext(
+            mqtt_client=self.mqtt,
+            device_tracker=self.device_tracker,
+            ai_agent=self.ai,
+            config=config
+        )
+        set_context(self.runtime_context)
 
         self.messages_deque: Deque[str] = collections.deque(maxlen=config.max_messages)
         self.new_message_count = 0
@@ -428,7 +444,12 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         # Keyboard input thread for manual triggers
         self.keyboard_thread: Optional[threading.Thread] = None
         self.manual_trigger = False  # Flag to track if trigger was manual
-        self.last_trigger_result: Optional[TriggerResult] = None  # Last trigger result
+        
+        # Thread-safe queue for trigger results to prevent race condition where
+        # a second trigger could overwrite the first before Main Loop processes it.
+        # Uses deque with lock instead of single variable to collect all pending triggers.
+        self.pending_trigger_results: Deque[TriggerResult] = collections.deque(maxlen=20)
+        self.trigger_results_lock = threading.Lock()
 
         # Deduplication: track last queued trigger to avoid redundant requests
         self._last_queued_trigger: Optional[tuple[str, str]] = None  # (topic, field)
@@ -543,16 +564,28 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                     if instant_trigger:
                         self.ai_event.clear()
 
-                    # Capture snapshot and trigger result
+                    # If AI is busy, don't drain triggers - let them accumulate
+                    # They'll be processed when AI becomes free
+                    if self.ai_busy.is_set():
+                        logging.debug(
+                            "AI is busy, accumulating triggers (reason: %s)", reason
+                        )
+                        continue
+
+                    # Capture snapshot and drain ALL pending trigger results
+                    # This prevents race condition where rapid triggers could be lost
                     with self.lock:
                         snapshot = "\n".join(list(self.messages_deque))
                         self.new_message_count = 0
                         last_check_time = time.time()
-                        trigger_result = self.last_trigger_result
-                        self.last_trigger_result = None  # Clear after use
+                    
+                    # Drain all pending trigger results atomically
+                    with self.trigger_results_lock:
+                        trigger_results = list(self.pending_trigger_results)
+                        self.pending_trigger_results.clear()
 
                     if snapshot:
-                        self._handle_ai_check(snapshot, reason, trigger_result)
+                        self._handle_ai_check(snapshot, reason, trigger_results)
 
         except KeyboardInterrupt:
             logging.info("Stopping daemon (KeyboardInterrupt)...")
@@ -604,41 +637,55 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
 
     def _handle_ai_check(
         self, snapshot: str, reason: str,
-        trigger_result: Optional[TriggerResult] = None
+        trigger_results: Optional[list[TriggerResult]] = None
     ):
-        """Handle the AI check based on mode."""
+        """Handle the AI check based on mode.
+        
+        Args:
+            snapshot: MQTT message snapshot
+            reason: Trigger reason string
+            trigger_results: List of all trigger results that fired since last check
+        """
+        if trigger_results is None:
+            trigger_results = []
+            
         if self.config.no_ai:
             logging.info(
-                "[NO-AI MODE] Would have triggered AI check (reason: %s), %d messages",
+                "[NO-AI MODE] Would have triggered AI check (reason: %s), %d messages, %d triggers",
                 reason,
-                len(snapshot.splitlines())
+                len(snapshot.splitlines()),
+                len(trigger_results)
             )
         else:
             # Queue the AI request for async processing
-            # Skip if AI is already busy to avoid queue buildup
-            if self.ai_busy.is_set():
-                logging.debug(
-                    "AI is busy, skipping request (reason: %s)", reason
-                )
-                return
+            # Note: ai_busy check is done in _main_loop before calling this method
 
             # Deduplicate: skip if same topic/field as last queued trigger
-            if trigger_result and trigger_result.topic and trigger_result.field_name:
-                trigger_key = (trigger_result.topic, trigger_result.field_name)
-                if trigger_key == self._last_queued_trigger:
-                    logging.debug(
-                        "Deduplicating trigger for %s[%s]",
-                        trigger_result.topic, trigger_result.field_name
-                    )
-                    return
-                self._last_queued_trigger = trigger_key
+            # When we have multiple triggers, use the first one for deduplication
+            if trigger_results:
+                first_trigger = trigger_results[0]
+                if first_trigger.topic and first_trigger.field_name:
+                    trigger_key = (first_trigger.topic, first_trigger.field_name)
+                    if trigger_key == self._last_queued_trigger:
+                        logging.debug(
+                            "Deduplicating trigger for %s[%s]",
+                            first_trigger.topic, first_trigger.field_name
+                        )
+                        return
+                    self._last_queued_trigger = trigger_key
 
             request = AiRequest(
-                snapshot=snapshot, reason=reason, trigger_result=trigger_result
+                snapshot=snapshot, reason=reason, trigger_results=trigger_results
             )
             try:
                 self.ai_queue.put_nowait(request)
-                logging.debug("Queued AI request (reason: %s)", reason)
+                if len(trigger_results) > 1:
+                    logging.info(
+                        "Queued AI request with %d triggers (reason: %s)",
+                        len(trigger_results), reason
+                    )
+                else:
+                    logging.debug("Queued AI request (reason: %s)", reason)
             except queue.Full:
                 logging.debug(
                     "AI queue full, dropping request (reason: %s)", reason
@@ -676,11 +723,22 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                     self.kb.load_all()
                     self.ai.run_analysis(
                         request.snapshot, self.kb, request.reason,
-                        request.trigger_result
+                        request.trigger_results
                     )
                 finally:
                     self.ai_busy.clear()
                     self.ai_queue.task_done()
+                    
+                    # Check if triggers accumulated while we were busy
+                    # If so, signal the main loop to process them
+                    with self.trigger_results_lock:
+                        has_pending = len(self.pending_trigger_results) > 0
+                    if has_pending:
+                        logging.debug(
+                            "AI finished, signaling to process %d accumulated triggers",
+                            len(self.pending_trigger_results)
+                        )
+                        self.ai_event.set()
 
             except queue.Empty:
                 # Timeout, just continue to check self.running
@@ -798,8 +856,9 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                     
                     if not rule_handled:
                         # No rule matched - queue for AI (pattern learning or anomaly)
-                        with self.lock:
-                            self.last_trigger_result = trigger_result
+                        # Append to deque (thread-safe) to prevent race condition
+                        with self.trigger_results_lock:
+                            self.pending_trigger_results.append(trigger_result)
                         self.ai_event.set()
                     # If rule_handled, skip AI - the rule was executed directly
                     
@@ -905,8 +964,9 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                             "trigger_field": trigger_result.field_name
                         })
                         
-                        with self.lock:
-                            self.last_trigger_result = trigger_result
+                        # Append to deque (thread-safe) to prevent race condition
+                        with self.trigger_results_lock:
+                            self.pending_trigger_results.append(trigger_result)
                         self.ai_event.set()
                         
                         # In simulation mode, wait for AI to finish before continuing

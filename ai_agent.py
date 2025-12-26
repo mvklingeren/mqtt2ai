@@ -393,18 +393,52 @@ def execute_tool_call(tool_name: str, arguments: dict) -> str:
 
 
 # Global reference to AiAgent for alert system (set by daemon)
+# Kept for backward compatibility - prefer using RuntimeContext
 _alert_agent: 'AiAgent' = None
 _alert_config: Config = None
 
 
 def set_alert_agent(agent: 'AiAgent', config: Config) -> None:
-    """Set the global AI agent for alert system use."""
+    """Set the global AI agent for alert system use.
+    
+    Note: This is kept for backward compatibility. The daemon now also
+    sets these via RuntimeContext.
+    """
     global _alert_agent, _alert_config
     _alert_agent = agent
     _alert_config = config
 
 
-def raise_alert(severity: float, reason: str, context: dict = None) -> str:
+def _get_alert_dependencies(runtime_context=None):
+    """Get alert dependencies from context or fall back to globals.
+    
+    Args:
+        runtime_context: Optional RuntimeContext instance
+        
+    Returns:
+        Tuple of (ai_agent, config, device_tracker)
+    """
+    # Try runtime context first
+    if runtime_context:
+        agent = runtime_context.ai_agent or _alert_agent
+        config = runtime_context.config or _alert_config
+        device_tracker = runtime_context.device_tracker
+    else:
+        agent = _alert_agent
+        config = _alert_config
+        # Fall back to global getter for device tracker
+        from daemon import get_device_tracker
+        device_tracker = get_device_tracker()
+    
+    return agent, config, device_tracker
+
+
+def raise_alert(
+    severity: float,
+    reason: str,
+    context: dict = None,
+    runtime_context=None
+) -> str:
     """Raise an alert with severity 0.0-1.0.
     
     This function is called by the AI (via tool call) or directly by rules
@@ -419,12 +453,11 @@ def raise_alert(severity: float, reason: str, context: dict = None) -> str:
         severity: Alert severity from 0.0 to 1.0
         reason: Human-readable reason for the alert
         context: Optional additional context dict
+        runtime_context: Optional RuntimeContext for dependency injection
         
     Returns:
         Status message about the alert handling
     """
-    from daemon import get_device_tracker
-    
     # Clamp severity to valid range
     severity = max(0.0, min(1.0, severity))
     
@@ -462,20 +495,24 @@ def raise_alert(severity: float, reason: str, context: dict = None) -> str:
             "timestamp": datetime.now().isoformat()
         }
         try:
-            tools.send_mqtt_message("mqtt2ai/alerts", json.dumps(notification))
+            # Pass runtime_context to send_mqtt_message for DI
+            from context import get_context
+            ctx = runtime_context or get_context()
+            tools.send_mqtt_message("mqtt2ai/alerts", json.dumps(notification), ctx)
             return f"Alert notification sent (severity {severity:.1f}): {reason}"
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("Failed to send alert notification: %s", e)
             return f"Alert logged but notification failed: {e}"
     
     # High priority: AI decides action with full device context
-    if _alert_agent is None or _alert_config is None:
+    agent, config, device_tracker = _get_alert_dependencies(runtime_context)
+    
+    if agent is None or config is None:
         logging.error("Alert agent not initialized - cannot process high severity alert")
         return f"Alert logged but AI not available (severity {severity:.1f}): {reason}"
     
     # Get a point-in-time snapshot of device states for consistent AI decision-making
     # This prevents TOCTOU race conditions where states could change during AI processing
-    device_tracker = get_device_tracker()
     if device_tracker:
         snapshot = device_tracker.get_snapshot()
         device_states = snapshot.states
@@ -496,7 +533,7 @@ def raise_alert(severity: float, reason: str, context: dict = None) -> str:
     
     # Execute AI call synchronously for alerts (they need immediate response)
     try:
-        _execute_alert_ai_call(_alert_agent, alert_prompt)
+        _execute_alert_ai_call(agent, alert_prompt)
         return f"Alert processed by AI (severity {severity:.1f}): {reason}"
     except Exception as e:  # pylint: disable=broad-exception-caught
         logging.error("Alert AI call failed: %s", e)
@@ -627,32 +664,50 @@ class AiAgent:
         self.prompt_builder = PromptBuilder(config)
 
     def run_analysis(self, messages_snapshot: str, kb: KnowledgeBase,
-                     trigger_reason: str, trigger_result=None):
+                     trigger_reason: str, trigger_results=None):
         """Construct the prompt and call the configured AI CLI.
         
         Args:
             messages_snapshot: Raw MQTT messages as newline-separated string
             kb: KnowledgeBase with rules, patterns, and rulebook
             trigger_reason: Human-readable trigger reason string
-            trigger_result: Optional TriggerResult with trigger context
+            trigger_results: Optional list of TriggerResult objects with trigger context.
+                            Multiple triggers can fire between AI checks; all are included.
         """
+        from trigger_analyzer import TriggerResult
+        
+        # Normalize to list for consistent handling
+        if trigger_results is None:
+            trigger_results = []
+        elif isinstance(trigger_results, TriggerResult):
+            # Backwards compatibility: single TriggerResult passed
+            trigger_results = [trigger_results]
+        
         cyan, reset = "\033[96m", "\033[0m"
         provider = self.config.ai_provider.upper()
-        logging.info(
-            "%s--- AI Check Started [%s] (reason: %s) ---%s",
-            cyan, provider, trigger_reason, reset
-        )
+        
+        # Log with trigger count if multiple
+        if len(trigger_results) > 1:
+            logging.info(
+                "%s--- AI Check Started [%s] (reason: %s, %d triggers) ---%s",
+                cyan, provider, trigger_reason, len(trigger_results), reset
+            )
+        else:
+            logging.info(
+                "%s--- AI Check Started [%s] (reason: %s) ---%s",
+                cyan, provider, trigger_reason, reset
+            )
 
         # Use PromptBuilder for intelligent prompt construction
         # Use compact prompt for openai-compatible providers to stay within token limits
         # Groq free tier has 6-14K TPM limits, and tool call iterations accumulate tokens
         if self.config.ai_provider == "openai-compatible":
             prompt = self.prompt_builder.build_compact(
-                messages_snapshot, kb, trigger_result, trigger_reason
+                messages_snapshot, kb, trigger_results, trigger_reason
             )
         else:
             prompt = self.prompt_builder.build(
-                messages_snapshot, kb, trigger_result, trigger_reason
+                messages_snapshot, kb, trigger_results, trigger_reason
             )
         
         logging.debug("Prompt: %d chars (~%d tokens)", len(prompt), len(prompt)//4)

@@ -2,14 +2,17 @@
 
 This module provides pure tool functions that can be called by any AI provider
 (OpenAI, Gemini, Claude) through their function calling / tool use APIs.
-The MqttClient dependency is injected at runtime by the daemon.
+The MqttClient dependency can be injected via RuntimeContext or legacy setters.
 """
 
 import json
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from utils import load_json_file, save_json_file
+
+if TYPE_CHECKING:
+    from context import RuntimeContext
 
 # Rules files
 LEARNED_RULES_FILE = "learned_rules.json"
@@ -17,6 +20,7 @@ PENDING_PATTERNS_FILE = "pending_patterns.json"
 REJECTED_PATTERNS_FILE = "rejected_patterns.json"
 
 # Module-level MQTT client (injected by daemon at startup)
+# Kept for backward compatibility - prefer using RuntimeContext
 _mqtt_client = None
 
 # Module-level config for disable_new_rules setting
@@ -25,6 +29,8 @@ _disable_new_rules = False
 
 def set_mqtt_client(client) -> None:
     """Set the MQTT client used by tools.
+    
+    Note: This is kept for backward compatibility. Prefer using RuntimeContext.
     
     Args:
         client: MqttClient instance for publishing messages
@@ -43,17 +49,37 @@ def set_disable_new_rules(disable: bool) -> None:
     _disable_new_rules = disable
 
 
-def send_mqtt_message(topic: str, payload: str) -> str:
+def _get_mqtt_client(context: Optional['RuntimeContext'] = None):
+    """Get the MQTT client from context or fallback to module-level global.
+    
+    Args:
+        context: Optional RuntimeContext with mqtt_client
+        
+    Returns:
+        The MQTT client, or None if not available
+    """
+    if context and context.mqtt_client:
+        return context.mqtt_client
+    return _mqtt_client
+
+
+def send_mqtt_message(
+    topic: str,
+    payload: str,
+    context: Optional['RuntimeContext'] = None
+) -> str:
     """Send a message to an MQTT topic.
 
     Args:
         topic: The MQTT topic to publish to (e.g., 'alert/power')
         payload: The message payload, typically a JSON string
+        context: Optional RuntimeContext for dependency injection
 
     Returns:
         A confirmation message indicating success or failure
     """
-    if _mqtt_client and _mqtt_client.publish(topic, payload):
+    client = _get_mqtt_client(context)
+    if client and client.publish(topic, payload):
         return f"Successfully sent message to topic '{topic}'"
     return "Error: Failed to send MQTT message. Check connection to broker."
 

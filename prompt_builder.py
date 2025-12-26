@@ -58,7 +58,7 @@ class PromptBuilder:
         self,
         messages_snapshot: str,
         kb: KnowledgeBase,
-        trigger_result: Optional[TriggerResult] = None,
+        trigger_results: Optional[List[TriggerResult]] = None,
         trigger_reason: str = ""
     ) -> str:
         """Build an optimized prompt for AI analysis.
@@ -66,27 +66,37 @@ class PromptBuilder:
         Args:
             messages_snapshot: Raw MQTT messages as newline-separated string
             kb: KnowledgeBase with rules, patterns, and rulebook
-            trigger_result: Optional TriggerResult with trigger context
+            trigger_results: Optional list of TriggerResult objects with trigger context.
+                            Multiple triggers may fire between AI checks.
             trigger_reason: Human-readable trigger reason string
             
         Returns:
             Optimized prompt string
         """
-        # Extract trigger topic from trigger_result or trigger_reason
-        trigger_topic = self._extract_trigger_topic(trigger_result, trigger_reason)
+        # Normalize to list
+        if trigger_results is None:
+            trigger_results = []
+        elif isinstance(trigger_results, TriggerResult):
+            trigger_results = [trigger_results]
+        
+        # Extract trigger topics from all trigger_results
+        trigger_topics = self._extract_trigger_topics(trigger_results, trigger_reason)
+        # Use first topic for backwards compatibility where single topic is expected
+        trigger_topic = trigger_topics[0] if trigger_topics else None
 
-        # Filter rules and patterns by relevance
-        relevant_rules = self._filter_relevant_rules(kb.learned_rules, trigger_topic)
+        # Filter rules and patterns by relevance (using all trigger topics)
+        relevant_rules = self._filter_relevant_rules(kb.learned_rules, trigger_topic, trigger_topics=trigger_topics)
 
         # Build set of existing rule patterns for message annotation
         existing_patterns = self._build_existing_patterns_set(kb.learned_rules)
 
         # Compress messages with annotations for existing rules
         compressed_messages = self._compress_messages(
-            messages_snapshot, trigger_topic, existing_patterns=existing_patterns
+            messages_snapshot, trigger_topic, existing_patterns=existing_patterns,
+            trigger_topics=trigger_topics
         )
         relevant_patterns = self._filter_relevant_patterns(
-            kb.pending_patterns, trigger_topic
+            kb.pending_patterns, trigger_topic, trigger_topics=trigger_topics
         )
         rejected_patterns = kb.rejected_patterns
 
@@ -95,15 +105,19 @@ class PromptBuilder:
         demo_instruction = self._build_demo_instruction()
         # Pass both enabled rules (for display) and ALL rules (for skip patterns)
         all_rules = kb.learned_rules.get("rules", [])
-        rules_section = self._format_rules(relevant_rules, trigger_topic, all_rules)
+        rules_section = self._format_rules(relevant_rules, trigger_topic, all_rules, trigger_topics=trigger_topics)
         patterns_section = self._format_patterns(relevant_patterns)
         rejected_section = self._format_rejected(rejected_patterns)
+        
+        # Add trigger context section if multiple triggers
+        trigger_context = self._build_trigger_context(trigger_results)
 
         prompt = (
             f"{safety_alert}"
             f"You are a home automation AI with pattern learning. {demo_instruction}"
             "Use send_mqtt_message tool for MQTT actions - no shell commands.\n\n"
             f"{COMPACT_RULEBOOK}\n"
+            f"{trigger_context}"
             f"{rules_section}"
             f"{patterns_section}"
             f"{rejected_section}\n"
@@ -117,18 +131,25 @@ class PromptBuilder:
         self,
         messages_snapshot: str,
         kb: KnowledgeBase,
-        trigger_result: Optional[TriggerResult] = None,
+        trigger_results: Optional[List[TriggerResult]] = None,
         trigger_reason: str = ""
     ) -> str:
         """Build an extra-compact prompt for small context models.
         
         Targets ~2000 tokens for Ollama/Groq.
         """
-        trigger_topic = self._extract_trigger_topic(trigger_result, trigger_reason)
+        # Normalize to list
+        if trigger_results is None:
+            trigger_results = []
+        elif isinstance(trigger_results, TriggerResult):
+            trigger_results = [trigger_results]
+        
+        trigger_topics = self._extract_trigger_topics(trigger_results, trigger_reason)
+        trigger_topic = trigger_topics[0] if trigger_topics else None
 
         # Only include directly matching rules
         relevant_rules = self._filter_relevant_rules(
-            kb.learned_rules, trigger_topic, strict=True
+            kb.learned_rules, trigger_topic, strict=True, trigger_topics=trigger_topics
         )
 
         # Build set of existing rule patterns for message annotation
@@ -136,7 +157,8 @@ class PromptBuilder:
         
         # Compress messages with annotations
         compressed_messages = self._compress_messages(
-            messages_snapshot, trigger_topic, existing_patterns=existing_patterns
+            messages_snapshot, trigger_topic, existing_patterns=existing_patterns,
+            trigger_topics=trigger_topics
         )
 
         # Build minimal prompt
@@ -195,29 +217,72 @@ Tasks (in order):
         
         return ""
 
-    def _extract_trigger_topic(
+    def _extract_trigger_topics(
         self,
-        trigger_result: Optional[TriggerResult],
+        trigger_results: List[TriggerResult],
         trigger_reason: str
-    ) -> Optional[str]:
-        """Extract the triggering topic from context."""
-        # TriggerResult doesn't have topic directly, extract from reason
-        # Format: "State field 'occupancy' changed" or similar
-        # We need to match against message buffer to find the topic
+    ) -> List[str]:
+        """Extract all triggering topics from trigger results and reason string.
         
-        # Try to extract from trigger_reason string
-        # Common formats: "topic: zigbee2mqtt/xxx" or just the topic name
+        Args:
+            trigger_results: List of TriggerResult objects (may have .topic attribute)
+            trigger_reason: Human-readable trigger reason string
+            
+        Returns:
+            List of unique trigger topics (preserves order)
+        """
+        topics = []
+        seen = set()
+        
+        # First, extract from TriggerResult objects (most reliable)
+        for tr in trigger_results:
+            if tr.topic and tr.topic not in seen:
+                topics.append(tr.topic)
+                seen.add(tr.topic)
+        
+        # Also try to extract from trigger_reason string as fallback
         if "topic:" in trigger_reason.lower():
             match = re.search(r'topic:\s*(\S+)', trigger_reason, re.IGNORECASE)
-            if match:
-                return match.group(1)
+            if match and match.group(1) not in seen:
+                topics.append(match.group(1))
+                seen.add(match.group(1))
         
-        # Look for zigbee2mqtt or similar patterns
-        match = re.search(r'(zigbee2mqtt/\S+|homie/\S+|ring/\S+)', trigger_reason)
-        if match:
-            return match.group(1)
-            
-        return None
+        # Look for zigbee2mqtt or similar patterns in reason
+        for match in re.finditer(r'(zigbee2mqtt/\S+|homie/\S+|ring/\S+)', trigger_reason):
+            topic = match.group(1)
+            if topic not in seen:
+                topics.append(topic)
+                seen.add(topic)
+        
+        return topics
+    
+    def _build_trigger_context(self, trigger_results: List[TriggerResult]) -> str:
+        """Build a trigger context section for multiple triggers.
+        
+        When multiple triggers fire between AI checks, this section explains
+        all of them so the AI can properly analyze the full context.
+        """
+        if not trigger_results:
+            return ""
+        
+        if len(trigger_results) == 1:
+            # Single trigger - no special section needed
+            return ""
+        
+        lines = [
+            f"\n## ⚠️ MULTIPLE TRIGGERS ({len(trigger_results)}) ⚠️",
+            "The following events ALL triggered this AI check (analyze all):"
+        ]
+        
+        for i, tr in enumerate(trigger_results, 1):
+            topic = tr.topic or "unknown"
+            field = tr.field_name or "?"
+            old_val = tr.old_value
+            new_val = tr.new_value
+            lines.append(f"  {i}. {topic}[{field}]: {old_val} → {new_val}")
+        
+        lines.append("")  # Empty line for separation
+        return '\n'.join(lines) + '\n'
 
     def _build_existing_patterns_set(
         self,
@@ -243,14 +308,16 @@ Tasks (in order):
         self,
         messages_snapshot: str,
         trigger_topic: Optional[str],
-        existing_patterns: Optional[set] = None
+        existing_patterns: Optional[set] = None,
+        trigger_topics: Optional[List[str]] = None
     ) -> str:
         """Compress MQTT messages with deduplication and counts.
 
         Args:
             messages_snapshot: Raw messages as newline-separated string
-            trigger_topic: Topic that triggered analysis (prioritized)
+            trigger_topic: Primary topic that triggered analysis (backwards compat)
             existing_patterns: Set of existing rule patterns for annotation
+            trigger_topics: List of all trigger topics (when multiple triggers fired)
 
         Returns:
             Compressed messages string
@@ -258,6 +325,13 @@ Tasks (in order):
         lines = messages_snapshot.strip().split('\n')
         if not lines:
             return ""
+        
+        # Build set of all trigger topics for efficient lookup
+        topics_to_highlight = set()
+        if trigger_topic:
+            topics_to_highlight.add(trigger_topic)
+        if trigger_topics:
+            topics_to_highlight.update(trigger_topics)
 
         # First pass: collect all /set topics to identify status feedback
         # Also collect action_topic values from announce messages to mark as automated
@@ -290,8 +364,8 @@ Tasks (in order):
 
             timestamp, topic, payload = parsed
 
-            # Check if this is the trigger topic - always keep
-            if trigger_topic and topic == trigger_topic:
+            # Check if this is any trigger topic - always keep and mark
+            if topic in topics_to_highlight:
                 short_topic = self._shorten_topic(topic)
                 trigger_messages.append(
                     f"[{timestamp}] {short_topic} {self._format_payload(payload)} (TRIGGER)"
@@ -454,14 +528,16 @@ Tasks (in order):
         self,
         learned_rules: Dict[str, Any],
         trigger_topic: Optional[str],
-        strict: bool = False
+        strict: bool = False,
+        trigger_topics: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
-        """Filter rules to those relevant to the trigger.
+        """Filter rules to those relevant to the trigger(s).
         
         Args:
             learned_rules: Full learned rules dict
-            trigger_topic: Topic that triggered analysis
+            trigger_topic: Primary topic that triggered analysis (backwards compat)
             strict: If True, only exact matches; if False, also include recent rules
+            trigger_topics: List of all trigger topics (when multiple triggers fired)
             
         Returns:
             List of relevant rule dicts
@@ -469,6 +545,13 @@ Tasks (in order):
         rules = learned_rules.get("rules", [])
         if not rules:
             return []
+        
+        # Build set of all trigger topics for efficient lookup
+        topics_to_match = set()
+        if trigger_topic:
+            topics_to_match.add(trigger_topic)
+        if trigger_topics:
+            topics_to_match.update(trigger_topics)
 
         relevant = []
         other = []
@@ -480,8 +563,8 @@ Tasks (in order):
 
             rule_trigger_topic = rule.get("trigger", {}).get("topic", "")
             
-            # Check if matches trigger topic
-            if trigger_topic and rule_trigger_topic == trigger_topic:
+            # Check if matches any trigger topic
+            if rule_trigger_topic in topics_to_match:
                 relevant.append(rule)
                 continue
 
@@ -510,19 +593,27 @@ Tasks (in order):
     def _filter_relevant_patterns(
         self,
         pending_patterns: Dict[str, Any],
-        trigger_topic: Optional[str]
+        trigger_topic: Optional[str],
+        trigger_topics: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
-        """Filter patterns to those relevant to the trigger."""
+        """Filter patterns to those relevant to the trigger(s)."""
         patterns = pending_patterns.get("patterns", [])
         if not patterns:
             return []
+        
+        # Build set of all trigger topics for efficient lookup
+        topics_to_match = set()
+        if trigger_topic:
+            topics_to_match.add(trigger_topic)
+        if trigger_topics:
+            topics_to_match.update(trigger_topics)
 
         relevant = []
         for pattern in patterns:
             pattern_trigger = pattern.get("trigger_topic", "")
             
-            # Include if matches trigger topic or is being actively tracked
-            if trigger_topic and pattern_trigger == trigger_topic:
+            # Include if matches any trigger topic or is being actively tracked
+            if pattern_trigger in topics_to_match:
                 relevant.append(pattern)
             elif len(pattern.get("observations", [])) >= 2:
                 # Include patterns close to becoming rules
@@ -534,15 +625,24 @@ Tasks (in order):
         self,
         rules: List[Dict[str, Any]],
         trigger_topic: Optional[str],
-        all_rules: Optional[List[Dict[str, Any]]] = None
+        all_rules: Optional[List[Dict[str, Any]]] = None,
+        trigger_topics: Optional[List[str]] = None
     ) -> str:
         """Format rules section for prompt.
         
         Args:
             rules: Filtered/enabled rules to display for execution
-            trigger_topic: Topic that triggered analysis
+            trigger_topic: Primary topic that triggered analysis (backwards compat)
             all_rules: ALL rules (enabled and disabled) for SKIP PATTERNS section
+            trigger_topics: List of all trigger topics (when multiple triggers fired)
         """
+        # Build set of all trigger topics for matching
+        topics_to_match = set()
+        if trigger_topic:
+            topics_to_match.add(trigger_topic)
+        if trigger_topics:
+            topics_to_match.update(trigger_topics)
+        
         # Display section for enabled rules
         if not rules:
             rules_section = "\n## Learned Rules: None yet.\n"
@@ -554,11 +654,12 @@ Tasks (in order):
                 action = rule.get("action", {})
                 occurrences = rule.get("confidence", {}).get("occurrences", 0)
                 
-                # Mark if this matches the current trigger
-                marker = " ← MATCHES" if trigger_topic and trigger.get("topic") == trigger_topic else ""
+                # Mark if this matches any trigger topic
+                rule_topic = trigger.get("topic")
+                marker = " ← MATCHES" if rule_topic in topics_to_match else ""
                 
                 lines.append(
-                    f"- {rule_id}: {trigger.get('topic')} "
+                    f"- {rule_id}: {rule_topic} "
                     f"[{trigger.get('field')}={trigger.get('value')}] "
                     f"→ {action.get('topic')} ({occurrences} triggers){marker}"
                 )
