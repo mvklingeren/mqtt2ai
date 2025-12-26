@@ -146,22 +146,6 @@ def mock_subprocess_run():
         yield mock
 
 
-@pytest.fixture
-def mock_subprocess_popen():
-    """Mock subprocess.Popen for testing process spawning.
-    
-    Used for mosquitto_sub listener process which still uses subprocess.
-    """
-    with patch("subprocess.Popen") as mock:
-        process_mock = MagicMock()
-        process_mock.stdout = iter([])
-        process_mock.stderr = MagicMock()
-        process_mock.communicate.return_value = ("", "")
-        process_mock.returncode = 0
-        mock.return_value = process_mock
-        yield mock
-
-
 def create_json_file(filepath: str, data: dict) -> None:
     """Helper to create a JSON file with data."""
     with open(filepath, "w", encoding="utf-8") as f:

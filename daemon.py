@@ -365,6 +365,9 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         self.manual_trigger = False  # Flag to track if trigger was manual
         self.last_trigger_result: Optional[TriggerResult] = None  # Last trigger result
 
+        # Queue for receiving MQTT messages from paho-mqtt subscription
+        self.mqtt_message_queue: queue.Queue[tuple[str, str]] = queue.Queue()
+
     def start(self):
         """Start the daemon."""
         setup_logging(self.config)
@@ -629,54 +632,49 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         logging.info("Daemon shutdown complete")
 
     def _collector_loop(self):  # pylint: disable=too-many-branches,too-many-statements
-        """Background thread that collects MQTT messages."""
+        """Background thread that collects MQTT messages via paho-mqtt subscription."""
         logging.info(
             "Starting MQTT collector (quiet for %ds)...",
             self.config.skip_printing_seconds
         )
 
         try:
-            process = self.mqtt.start_listener_process()
+            # Subscribe to topics using paho-mqtt
+            if not self.mqtt.subscribe(
+                self.config.mqtt_topics,
+                self.mqtt_message_queue
+            ):
+                logging.critical("Failed to subscribe to MQTT topics")
+                os.kill(os.getpid(), signal.SIGTERM)
+                return
+
             start_time = time.time()
             quiet_period_over = False
 
-            for raw_line in iter(process.stdout.readline, b""):
-                if not self.running:
-                    break
-
-                # 1. Safe Topic Extraction
+            while self.running:
+                # Get message from queue with timeout to allow checking self.running
                 try:
-                    space_idx = raw_line.index(b" ")
-                    raw_topic = raw_line[:space_idx].decode("ascii")
-                except (ValueError, UnicodeDecodeError):
-                    continue  # Skip invalid lines
+                    current_topic, current_payload = self.mqtt_message_queue.get(
+                        timeout=1.0
+                    )
+                except queue.Empty:
+                    continue
 
-                # 2. Binary Topic Filtering (Prefixes)
+                # 1. Topic Filtering (Prefixes)
                 if any(
-                    raw_topic.startswith(p)
+                    current_topic.startswith(p)
                     for p in self.config.ignore_printing_prefixes
                 ):
                     continue
 
-                # 3. Payload Decoding
-                try:
-                    line = raw_line.decode("utf-8").strip()
-                except UnicodeDecodeError:
-                    continue
-
-                if not line:
-                    continue
-
-                current_topic = raw_topic
-                current_payload = (
-                    line[len(current_topic) + 1:].strip()
-                    if len(line) > len(current_topic) else ""
-                )
-
+                # 2. Payload validation
                 if not current_payload or not current_payload.isprintable():
                     continue
 
-                # 4. Display Logic
+                # Build display line (topic + payload format for consistency)
+                line = f"{current_topic} {current_payload}"
+
+                # 3. Display Logic
                 elapsed = time.time() - start_time
                 should_print = False
 
@@ -688,7 +686,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                     if current_topic not in self.config.ignore_printing_topics:
                         should_print = True
 
-                # 5. Analysis
+                # 4. Analysis
                 trigger_result = self.trigger_analyzer.analyze(
                     current_topic, current_payload
                 )
@@ -722,26 +720,14 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                     else:
                         print(f"{timestamp()} {line}")
 
-                # 6. Update device tracker
+                # 5. Update device tracker
                 self.device_tracker.update(current_topic, current_payload)
 
-                # 7. Store
+                # 6. Store
                 with self.lock:
                     self.messages_deque.append(f"{timestamp()} {line}")
                     self.new_message_count += 1
 
-            # Cleanup if process ends
-            process.communicate()
-            if process.returncode != 0:
-                logging.error(
-                    "mosquitto_sub exited with code %d", process.returncode
-                )
-
-        except FileNotFoundError:
-            logging.critical(
-                "CRITICAL: 'mosquitto_sub' not found. Cannot collect messages."
-            )
-            os.kill(os.getpid(), signal.SIGTERM)  # Kill daemon
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("Collector thread error: %s", e)
 

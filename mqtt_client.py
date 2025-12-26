@@ -1,11 +1,11 @@
 """MQTT Client module for the MQTT AI Daemon.
 
 This module handles MQTT operations using paho-mqtt for persistent connections
-and subprocess for the subscription listener process.
+including both publishing and subscribing to MQTT messages.
 """
 import json
-import subprocess
 import logging
+import queue
 import threading
 from datetime import datetime
 from typing import Any, Optional
@@ -27,6 +27,8 @@ class MqttClient:
         self._client: Optional[mqtt.Client] = None
         self._connected = threading.Event()
         self._lock = threading.Lock()
+        self._message_queue: Optional[queue.Queue] = None
+        self._subscribed_topics: list[str] = []
 
     def connect(self) -> bool:
         """Establish a persistent connection to the MQTT broker.
@@ -97,6 +99,10 @@ class MqttClient:
         if reason_code == 0:
             logging.info("Connected to MQTT broker successfully")
             self._connected.set()
+            # Resubscribe to topics on reconnection
+            for topic in self._subscribed_topics:
+                client.subscribe(topic)
+                logging.debug("Resubscribed to topic: %s", topic)
         else:
             logging.error("MQTT connection failed with code: %s", reason_code)
 
@@ -117,6 +123,66 @@ class MqttClient:
             )
         else:
             logging.info("Disconnected from MQTT broker")
+
+    def _on_message(
+        self,
+        client: mqtt.Client,
+        userdata: Any,
+        msg: mqtt.MQTTMessage
+    ):
+        """Callback when a message is received on a subscribed topic.
+        
+        Puts the message (topic, payload) tuple into the message queue
+        for processing by the daemon.
+        """
+        if self._message_queue is None:
+            logging.warning("Received message but no queue configured")
+            return
+        
+        try:
+            payload = msg.payload.decode("utf-8", errors="replace")
+            self._message_queue.put((msg.topic, payload))
+        except Exception as e:
+            logging.error("Error processing received message: %s", e)
+
+    def subscribe(self, topics: list[str], message_queue: queue.Queue) -> bool:
+        """Subscribe to MQTT topics and put received messages in the queue.
+        
+        Uses the persistent paho-mqtt connection. Will connect if not already
+        connected. Subscriptions are automatically restored on reconnection.
+        
+        Args:
+            topics: List of MQTT topic patterns to subscribe to.
+            message_queue: Queue where received (topic, payload) tuples are put.
+            
+        Returns:
+            True if subscriptions were successful, False otherwise.
+        """
+        self._message_queue = message_queue
+        
+        # Ensure we're connected
+        if not self._connected.is_set():
+            if not self.connect():
+                logging.error("Cannot subscribe: not connected to MQTT broker")
+                return False
+        
+        # Set the message callback
+        self._client.on_message = self._on_message
+        
+        # Subscribe to each topic
+        try:
+            for topic in topics:
+                result, _ = self._client.subscribe(topic)
+                if result == mqtt.MQTT_ERR_SUCCESS:
+                    self._subscribed_topics.append(topic)
+                    logging.info("Subscribed to topic: %s", topic)
+                else:
+                    logging.error("Failed to subscribe to %s: %s", topic, result)
+                    return False
+            return True
+        except Exception as e:
+            logging.error("Error subscribing to topics: %s", e)
+            return False
 
     def announce(
         self,
@@ -196,21 +262,3 @@ class MqttClient:
         except Exception as e:
             logging.error("Error publishing MQTT message: %s", e)
             return False
-
-    def start_listener_process(self) -> subprocess.Popen:
-        """Start the mosquitto_sub process for subscription.
-        
-        Note: Subscriptions still use subprocess for now as it requires
-        a larger architectural change to handle incoming messages.
-        """
-        cmd = [
-            "mosquitto_sub",
-            "-h", self.config.mqtt_host,
-            "-p", self.config.mqtt_port,
-        ]
-        # Add each topic with its own -t flag
-        for topic in self.config.mqtt_topics:
-            cmd.extend(["-t", topic])
-        cmd.append("-v")
-        logging.info("Starting MQTT listener: %s", ' '.join(cmd))
-        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

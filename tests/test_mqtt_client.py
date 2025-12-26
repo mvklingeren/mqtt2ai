@@ -1,6 +1,6 @@
 """Tests for the MqttClient module."""
 import os
-import subprocess
+import queue
 import sys
 from unittest.mock import patch, MagicMock, PropertyMock
 
@@ -265,90 +265,205 @@ class TestMqttClientPublish:
         assert result is False
 
 
-class TestMqttClientStartListenerProcess:
-    """Tests for the start_listener_process method."""
+class TestMqttClientSubscribe:
+    """Tests for the subscribe method."""
 
-    def test_start_listener_calls_popen(self, config, mock_subprocess_popen):
-        """Test that start_listener_process calls Popen."""
+    def test_subscribe_connects_if_not_connected(self, config, mock_paho_client):
+        """Test that subscribe auto-connects if not connected."""
         client = MqttClient(config)
-        process = client.start_listener_process()
+        message_queue = queue.Queue()
+        
+        # Simulate connection happening during subscribe
+        def trigger_connect(*args, **kwargs):
+            client._client = mock_paho_client
+            client._on_connect(mock_paho_client, None, MagicMock(), 0)
+        
+        mock_paho_client.connect.side_effect = trigger_connect
+        mock_paho_client.subscribe.return_value = (0, 1)  # (result, mid)
+        
+        result = client.subscribe(["test/#"], message_queue)
+        
+        assert result is True
+        mock_paho_client.connect.assert_called_once()
 
-        mock_subprocess_popen.assert_called_once()
-        assert process is not None
-
-    def test_start_listener_with_correct_command(self, config, mock_subprocess_popen):
-        """Test start_listener_process uses correct command."""
+    def test_subscribe_subscribes_to_topics(self, config, mock_paho_client):
+        """Test that subscribe subscribes to all provided topics."""
         client = MqttClient(config)
-        client.start_listener_process()
+        client._client = mock_paho_client
+        client._connected.set()
+        message_queue = queue.Queue()
+        
+        mock_paho_client.subscribe.return_value = (0, 1)  # (result, mid)
+        
+        client.subscribe(["zigbee2mqtt/#", "home/#"], message_queue)
+        
+        assert mock_paho_client.subscribe.call_count == 2
+        mock_paho_client.subscribe.assert_any_call("zigbee2mqtt/#")
+        mock_paho_client.subscribe.assert_any_call("home/#")
 
-        call_args = mock_subprocess_popen.call_args[0][0]
-        assert "mosquitto_sub" in call_args
-
-    def test_start_listener_with_correct_host(self, mock_subprocess_popen):
-        """Test start_listener_process uses correct host."""
-        config = Config()
-        config.mqtt_host = "mqtt.example.com"
+    def test_subscribe_sets_message_callback(self, config, mock_paho_client):
+        """Test that subscribe sets the on_message callback."""
         client = MqttClient(config)
+        client._client = mock_paho_client
+        client._connected.set()
+        message_queue = queue.Queue()
+        
+        mock_paho_client.subscribe.return_value = (0, 1)
+        
+        client.subscribe(["test/#"], message_queue)
+        
+        assert mock_paho_client.on_message == client._on_message
 
-        client.start_listener_process()
-
-        call_args = mock_subprocess_popen.call_args[0][0]
-        assert "-h" in call_args
-        host_idx = call_args.index("-h") + 1
-        assert call_args[host_idx] == "mqtt.example.com"
-
-    def test_start_listener_with_correct_port(self, mock_subprocess_popen):
-        """Test start_listener_process uses correct port."""
-        config = Config()
-        config.mqtt_port = "8883"
+    def test_subscribe_stores_queue(self, config, mock_paho_client):
+        """Test that subscribe stores the message queue."""
         client = MqttClient(config)
+        client._client = mock_paho_client
+        client._connected.set()
+        message_queue = queue.Queue()
+        
+        mock_paho_client.subscribe.return_value = (0, 1)
+        
+        client.subscribe(["test/#"], message_queue)
+        
+        assert client._message_queue is message_queue
 
-        client.start_listener_process()
-
-        call_args = mock_subprocess_popen.call_args[0][0]
-        assert "-p" in call_args
-        port_idx = call_args.index("-p") + 1
-        assert call_args[port_idx] == "8883"
-
-    def test_start_listener_with_correct_topics(self, mock_subprocess_popen):
-        """Test start_listener_process uses correct topics."""
-        config = Config()
-        config.mqtt_topics = ["zigbee2mqtt/#", "jokes/#"]
+    def test_subscribe_tracks_subscribed_topics(self, config, mock_paho_client):
+        """Test that subscribe tracks subscribed topics for reconnection."""
         client = MqttClient(config)
+        client._client = mock_paho_client
+        client._connected.set()
+        message_queue = queue.Queue()
+        
+        mock_paho_client.subscribe.return_value = (0, 1)
+        
+        client.subscribe(["zigbee2mqtt/#", "home/#"], message_queue)
+        
+        assert "zigbee2mqtt/#" in client._subscribed_topics
+        assert "home/#" in client._subscribed_topics
 
-        client.start_listener_process()
-
-        call_args = mock_subprocess_popen.call_args[0][0]
-        # Check that both topics are present with -t flags
-        assert call_args.count("-t") == 2
-        first_topic_idx = call_args.index("-t") + 1
-        assert call_args[first_topic_idx] == "zigbee2mqtt/#"
-        second_topic_idx = call_args.index("-t", first_topic_idx) + 1
-        assert call_args[second_topic_idx] == "jokes/#"
-
-    def test_start_listener_with_verbose_flag(self, config, mock_subprocess_popen):
-        """Test start_listener_process uses -v flag."""
+    def test_subscribe_returns_false_if_not_connected(self, config, mock_paho_client):
+        """Test subscribe returns False if connection fails."""
         client = MqttClient(config)
-        client.start_listener_process()
+        message_queue = queue.Queue()
+        
+        # Simulate connection failure
+        mock_paho_client.connect.side_effect = Exception("Connection refused")
+        
+        result = client.subscribe(["test/#"], message_queue)
+        
+        assert result is False
 
-        call_args = mock_subprocess_popen.call_args[0][0]
-        assert "-v" in call_args
-
-    def test_start_listener_pipes_stdout(self, config, mock_subprocess_popen):
-        """Test start_listener_process pipes stdout."""
+    def test_subscribe_returns_false_on_subscribe_error(self, config, mock_paho_client):
+        """Test subscribe returns False if MQTT subscribe fails."""
         client = MqttClient(config)
-        client.start_listener_process()
+        client._client = mock_paho_client
+        client._connected.set()
+        message_queue = queue.Queue()
+        
+        mock_paho_client.subscribe.return_value = (1, 1)  # Non-zero = error
+        
+        result = client.subscribe(["test/#"], message_queue)
+        
+        assert result is False
 
-        call_kwargs = mock_subprocess_popen.call_args[1]
-        assert call_kwargs.get("stdout") == subprocess.PIPE
-
-    def test_start_listener_pipes_stderr(self, config, mock_subprocess_popen):
-        """Test start_listener_process pipes stderr."""
+    def test_subscribe_returns_true_on_success(self, config, mock_paho_client):
+        """Test subscribe returns True on success."""
         client = MqttClient(config)
-        client.start_listener_process()
+        client._client = mock_paho_client
+        client._connected.set()
+        message_queue = queue.Queue()
+        
+        mock_paho_client.subscribe.return_value = (0, 1)
+        
+        result = client.subscribe(["test/#"], message_queue)
+        
+        assert result is True
 
-        call_kwargs = mock_subprocess_popen.call_args[1]
-        assert call_kwargs.get("stderr") == subprocess.PIPE
+
+class TestMqttClientOnMessage:
+    """Tests for the _on_message callback."""
+
+    def test_on_message_puts_message_in_queue(self, config, mock_paho_client):
+        """Test that _on_message puts messages in the queue."""
+        client = MqttClient(config)
+        message_queue = queue.Queue()
+        client._message_queue = message_queue
+        
+        # Create mock message
+        mock_msg = MagicMock()
+        mock_msg.topic = "test/topic"
+        mock_msg.payload = b'{"state": "ON"}'
+        
+        client._on_message(mock_paho_client, None, mock_msg)
+        
+        topic, payload = message_queue.get_nowait()
+        assert topic == "test/topic"
+        assert payload == '{"state": "ON"}'
+
+    def test_on_message_decodes_utf8_payload(self, config, mock_paho_client):
+        """Test that _on_message decodes UTF-8 payloads."""
+        client = MqttClient(config)
+        message_queue = queue.Queue()
+        client._message_queue = message_queue
+        
+        mock_msg = MagicMock()
+        mock_msg.topic = "test/topic"
+        mock_msg.payload = "hellö wörld".encode("utf-8")
+        
+        client._on_message(mock_paho_client, None, mock_msg)
+        
+        _, payload = message_queue.get_nowait()
+        assert payload == "hellö wörld"
+
+    def test_on_message_handles_invalid_utf8(self, config, mock_paho_client):
+        """Test that _on_message handles invalid UTF-8 gracefully."""
+        client = MqttClient(config)
+        message_queue = queue.Queue()
+        client._message_queue = message_queue
+        
+        mock_msg = MagicMock()
+        mock_msg.topic = "test/topic"
+        mock_msg.payload = b'\xff\xfe invalid'  # Invalid UTF-8 bytes
+        
+        client._on_message(mock_paho_client, None, mock_msg)
+        
+        # Should not raise, message should be in queue with replacement chars
+        topic, payload = message_queue.get_nowait()
+        assert topic == "test/topic"
+        assert payload  # Contains replacement characters
+
+    def test_on_message_without_queue_logs_warning(self, config, mock_paho_client, caplog):
+        """Test that _on_message logs warning if no queue configured."""
+        import logging
+        
+        client = MqttClient(config)
+        client._message_queue = None
+        
+        mock_msg = MagicMock()
+        mock_msg.topic = "test/topic"
+        mock_msg.payload = b'test'
+        
+        with caplog.at_level(logging.WARNING):
+            client._on_message(mock_paho_client, None, mock_msg)
+        
+        assert "no queue configured" in caplog.text
+
+
+class TestMqttClientReconnection:
+    """Tests for reconnection behavior."""
+
+    def test_on_connect_resubscribes_to_topics(self, config, mock_paho_client):
+        """Test that on_connect resubscribes to tracked topics."""
+        client = MqttClient(config)
+        client._client = mock_paho_client
+        client._subscribed_topics = ["zigbee2mqtt/#", "home/#"]
+        
+        # Simulate reconnection
+        client._on_connect(mock_paho_client, None, MagicMock(), 0)
+        
+        assert mock_paho_client.subscribe.call_count == 2
+        mock_paho_client.subscribe.assert_any_call("zigbee2mqtt/#")
+        mock_paho_client.subscribe.assert_any_call("home/#")
 
 
 class TestMqttClientAnnounce:
