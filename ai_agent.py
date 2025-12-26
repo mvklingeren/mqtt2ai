@@ -473,9 +473,18 @@ def raise_alert(severity: float, reason: str, context: dict = None) -> str:
         logging.error("Alert agent not initialized - cannot process high severity alert")
         return f"Alert logged but AI not available (severity {severity:.1f}): {reason}"
     
-    # Get all device states for context
+    # Get a point-in-time snapshot of device states for consistent AI decision-making
+    # This prevents TOCTOU race conditions where states could change during AI processing
     device_tracker = get_device_tracker()
-    device_states = device_tracker.get_all_states() if device_tracker else {}
+    if device_tracker:
+        snapshot = device_tracker.get_snapshot()
+        device_states = snapshot.states
+        logging.debug(
+            "Device snapshot taken: %d devices, age=%.3fs",
+            snapshot.device_count, snapshot.age_seconds
+        )
+    else:
+        device_states = {}
     
     # Build alert prompt for AI
     alert_prompt = _build_alert_prompt(severity, reason, context, device_states)

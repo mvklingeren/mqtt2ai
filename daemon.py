@@ -55,11 +55,41 @@ import fnmatch
 import re
 
 
+@dataclass
+class DeviceStateSnapshot:
+    """An immutable point-in-time snapshot of device states.
+    
+    This ensures the AI makes decisions based on a consistent view
+    of device states that won't change during processing.
+    """
+    states: dict[str, dict]
+    timestamp: float
+    
+    def get_state(self, topic: str) -> Optional[dict]:
+        """Get the state for a specific topic from this snapshot."""
+        return self.states.get(topic)
+    
+    @property
+    def device_count(self) -> int:
+        """Get the number of devices in this snapshot."""
+        return len(self.states)
+    
+    @property
+    def age_seconds(self) -> float:
+        """Get the age of this snapshot in seconds."""
+        return time.time() - self.timestamp
+
+
 class DeviceStateTracker:
     """Tracks the last known state of devices matching a topic pattern.
     
     This provides an in-memory cache of device states that can be used
     by the alert system to give the AI full context about available devices.
+    
+    Thread Safety:
+        This class is thread-safe. All read operations return deep copies
+        or immutable snapshots to prevent TOCTOU race conditions between
+        the Collector Thread (writer) and AI Worker Thread (reader).
     """
     
     def __init__(self, pattern: str = "zigbee2mqtt/*"):
@@ -103,30 +133,54 @@ class DeviceStateTracker:
             state = json.loads(payload)
             if isinstance(state, dict):
                 with self._lock:
-                    self._states[topic] = state
+                    # Store a copy to prevent external mutation
+                    self._states[topic] = dict(state)
         except json.JSONDecodeError:
             pass  # Ignore non-JSON payloads
     
-    def get_all_states(self) -> dict[str, dict]:
-        """Get a copy of all tracked device states.
+    def get_snapshot(self) -> DeviceStateSnapshot:
+        """Get an immutable point-in-time snapshot of all device states.
+        
+        This is the preferred method for AI/alert processing as it provides
+        a consistent view that won't change during decision-making.
         
         Returns:
-            Dict mapping topic -> last known state
+            DeviceStateSnapshot with deep-copied states and timestamp
         """
         with self._lock:
-            return dict(self._states)
+            # Deep copy all states to ensure immutability
+            states_copy = {
+                topic: dict(state) for topic, state in self._states.items()
+            }
+            return DeviceStateSnapshot(
+                states=states_copy,
+                timestamp=time.time()
+            )
+    
+    def get_all_states(self) -> dict[str, dict]:
+        """Get a deep copy of all tracked device states.
+        
+        Note: Prefer get_snapshot() for AI processing to get timestamp info.
+        
+        Returns:
+            Dict mapping topic -> last known state (deep copied)
+        """
+        with self._lock:
+            # Deep copy to prevent mutation of returned dicts
+            return {topic: dict(state) for topic, state in self._states.items()}
     
     def get_state(self, topic: str) -> Optional[dict]:
-        """Get the last known state for a specific topic.
+        """Get a copy of the last known state for a specific topic.
         
         Args:
             topic: The MQTT topic
             
         Returns:
-            The last known state dict, or None if not tracked
+            A copy of the last known state dict, or None if not tracked
         """
         with self._lock:
-            return self._states.get(topic)
+            state = self._states.get(topic)
+            return dict(state) if state else None
     
     def get_device_count(self) -> int:
         """Get the number of tracked devices."""
