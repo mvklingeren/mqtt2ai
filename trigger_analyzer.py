@@ -26,6 +26,7 @@ class TriggerResult:
     field_name: Optional[str] = None
     old_value: Optional[Any] = None
     new_value: Optional[Any] = None
+    topic: Optional[str] = None  # The MQTT topic that triggered
 
     def __str__(self):
         if self.should_trigger:
@@ -287,16 +288,18 @@ class TriggerAnalyzer:
         result = self._check_state_fields(topic_state, payload)
         if result and result.should_trigger:
             topic_state.last_trigger_time = time.time()
+            result.topic = topic  # Include the topic for deduplication
             return result
 
         # Check numeric fields for significant changes
         result = self._check_numeric_fields(topic_state, payload)
         if result and result.should_trigger:
             topic_state.last_trigger_time = time.time()
+            result.topic = topic  # Include the topic for deduplication
             return result
 
         return TriggerResult(
-            should_trigger=False, reason="No significant changes detected"
+            should_trigger=False, reason="No significant changes detected", topic=topic
         )
 
     def get_stats(self) -> dict:

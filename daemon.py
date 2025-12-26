@@ -13,7 +13,7 @@ import threading
 import time
 import logging
 import signal
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from collections import deque as Deque
 from typing import Optional
@@ -43,6 +43,11 @@ class AiRequest:
     snapshot: str
     reason: str
     trigger_result: Optional[TriggerResult] = None
+    created_at: float = field(default_factory=time.time)
+
+    def is_expired(self, max_age_seconds: float = 30.0) -> bool:
+        """Check if this request is too old to be relevant."""
+        return (time.time() - self.created_at) > max_age_seconds
 
 
 import fnmatch
@@ -356,7 +361,8 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         self.collector_thread: Optional[threading.Thread] = None
 
         # AI worker thread and queue for async AI calls
-        self.ai_queue: queue.Queue[Optional[AiRequest]] = queue.Queue()
+        # maxsize=3 limits queue depth to prevent backlog of stale requests
+        self.ai_queue: queue.Queue[Optional[AiRequest]] = queue.Queue(maxsize=3)
         self.ai_thread: Optional[threading.Thread] = None
         self.ai_busy = threading.Event()  # Set when AI is processing a request
 
@@ -364,6 +370,9 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         self.keyboard_thread: Optional[threading.Thread] = None
         self.manual_trigger = False  # Flag to track if trigger was manual
         self.last_trigger_result: Optional[TriggerResult] = None  # Last trigger result
+
+        # Deduplication: track last queued trigger to avoid redundant requests
+        self._last_queued_trigger: Optional[tuple[str, str]] = None  # (topic, field)
 
         # Queue for receiving MQTT messages from paho-mqtt subscription
         self.mqtt_message_queue: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -554,11 +563,27 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 )
                 return
 
+            # Deduplicate: skip if same topic/field as last queued trigger
+            if trigger_result and trigger_result.topic and trigger_result.field_name:
+                trigger_key = (trigger_result.topic, trigger_result.field_name)
+                if trigger_key == self._last_queued_trigger:
+                    logging.debug(
+                        "Deduplicating trigger for %s[%s]",
+                        trigger_result.topic, trigger_result.field_name
+                    )
+                    return
+                self._last_queued_trigger = trigger_key
+
             request = AiRequest(
                 snapshot=snapshot, reason=reason, trigger_result=trigger_result
             )
-            self.ai_queue.put(request)
-            logging.debug("Queued AI request (reason: %s)", reason)
+            try:
+                self.ai_queue.put_nowait(request)
+                logging.debug("Queued AI request (reason: %s)", reason)
+            except queue.Full:
+                logging.debug(
+                    "AI queue full, dropping request (reason: %s)", reason
+                )
 
     def _ai_worker_loop(self):
         """Background thread that processes AI requests from the queue."""
@@ -573,6 +598,16 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 if request is None:
                     logging.debug("AI worker received shutdown signal")
                     break
+
+                # Skip expired requests to avoid processing stale data
+                if request.is_expired():
+                    age = time.time() - request.created_at
+                    logging.info(
+                        "Skipping expired AI request (age: %.1fs, reason: %s)",
+                        age, request.reason
+                    )
+                    self.ai_queue.task_done()
+                    continue
 
                 # Mark as busy to prevent queue buildup
                 self.ai_busy.set()
