@@ -31,22 +31,22 @@ class TestConfigDefaults:
     def test_default_max_messages(self):
         """Test default max messages value."""
         config = Config()
-        assert config.max_messages == 500
+        assert config.max_messages == 1000
 
     def test_default_ai_check_interval(self):
-        """Test default AI check interval (5 minutes)."""
+        """Test default AI check interval (10 minutes)."""
         config = Config()
-        assert config.ai_check_interval == 300
+        assert config.ai_check_interval == 600
 
     def test_default_ai_check_threshold(self):
-        """Test default AI check threshold (200 messages)."""
+        """Test default AI check threshold (300 messages)."""
         config = Config()
-        assert config.ai_check_threshold == 200
+        assert config.ai_check_threshold == 300
 
     def test_default_ai_provider(self):
-        """Test default AI provider is codex-openai."""
+        """Test default AI provider is openai-compatible."""
         config = Config()
-        assert config.ai_provider == "codex-openai"
+        assert config.ai_provider == "openai-compatible"
 
     def test_default_verbose_is_false(self):
         """Test verbose mode is disabled by default."""
@@ -109,22 +109,22 @@ class TestConfigAIProviders:
     def test_gemini_model_default(self):
         """Test default Gemini model."""
         config = Config()
-        assert config.gemini_model == "gemini-2.5-flash"
+        assert config.gemini_model == "gemini-2.0-flash"
 
     def test_claude_model_default(self):
         """Test default Claude model."""
         config = Config()
         assert config.claude_model == "claude-3-5-haiku-latest"
 
-    def test_codex_model_default(self):
-        """Test default Codex model."""
+    def test_gemini_api_key_default_empty(self):
+        """Test Gemini API key is empty by default."""
         config = Config()
-        assert config.codex_model == "gpt-4o-mini"
+        assert config.gemini_api_key == ""
 
-    def test_claude_mcp_config_default_empty(self):
-        """Test Claude MCP config is empty by default."""
+    def test_claude_api_key_default_empty(self):
+        """Test Claude API key is empty by default."""
         config = Config()
-        assert config.claude_mcp_config == ""
+        assert config.claude_api_key == ""
 
 
 class TestConfigIgnoreLists:
@@ -136,10 +136,10 @@ class TestConfigIgnoreLists:
         assert "zigbee2mqtt/bridge/logging" in config.ignore_printing_topics
         assert "zigbee2mqtt/bridge/health" in config.ignore_printing_topics
 
-    def test_default_ignore_printing_prefixes_empty(self):
-        """Test default ignored prefixes is empty."""
+    def test_default_ignore_printing_prefixes(self):
+        """Test default ignored prefixes."""
         config = Config()
-        assert config.ignore_printing_prefixes == []
+        assert "stat/" in config.ignore_printing_prefixes
 
     def test_skip_printing_seconds_default(self):
         """Test default skip printing seconds."""
@@ -211,11 +211,11 @@ class TestConfigFromArgs:
             config = Config.from_args()
             assert config.ai_provider == "claude"
 
-    def test_from_args_with_ai_provider_codex(self):
-        """Test from_args with Codex AI provider."""
-        with patch("sys.argv", ["test", "--ai-provider", "codex-openai"]):
+    def test_from_args_with_ai_provider_openai_compatible(self):
+        """Test from_args with OpenAI-compatible AI provider."""
+        with patch("sys.argv", ["test", "--ai-provider", "openai-compatible"]):
             config = Config.from_args()
-            assert config.ai_provider == "codex-openai"
+            assert config.ai_provider == "openai-compatible"
 
     def test_from_args_with_gemini_model(self):
         """Test from_args with custom Gemini model."""
@@ -229,17 +229,17 @@ class TestConfigFromArgs:
             config = Config.from_args()
             assert config.claude_model == "claude-3-opus"
 
-    def test_from_args_with_codex_model(self):
-        """Test from_args with custom Codex model."""
-        with patch("sys.argv", ["test", "--codex-model", "gpt-4"]):
+    def test_from_args_with_gemini_api_key(self):
+        """Test from_args with Gemini API key."""
+        with patch("sys.argv", ["test", "--gemini-api-key", "test-key"]):
             config = Config.from_args()
-            assert config.codex_model == "gpt-4"
+            assert config.gemini_api_key == "test-key"
 
-    def test_from_args_with_claude_mcp_config(self):
-        """Test from_args with Claude MCP config path."""
-        with patch("sys.argv", ["test", "--claude-mcp-config", "/path/to/mcp.json"]):
+    def test_from_args_with_claude_api_key(self):
+        """Test from_args with Claude API key."""
+        with patch("sys.argv", ["test", "--claude-api-key", "test-key"]):
             config = Config.from_args()
-            assert config.claude_mcp_config == "/path/to/mcp.json"
+            assert config.claude_api_key == "test-key"
 
 
 class TestConfigEnvironmentVariables:
@@ -266,33 +266,19 @@ class TestConfigEnvironmentVariables:
                 config = Config.from_args()
                 assert config.ai_provider == "claude"
 
-    def test_gemini_command_from_env(self):
-        """Test Gemini command from environment variable."""
-        with patch.dict(os.environ, {"GEMINI_CLI_COMMAND": "/usr/local/bin/gemini"}):
+    def test_gemini_api_key_from_env(self):
+        """Test Gemini API key from environment variable."""
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-gemini-key"}):
             with patch("sys.argv", ["test"]):
                 config = Config.from_args()
-                assert config.gemini_command == "/usr/local/bin/gemini"
+                assert config.gemini_api_key == "test-gemini-key"
 
-    def test_claude_command_from_env(self):
-        """Test Claude command from environment variable."""
-        with patch.dict(os.environ, {"CLAUDE_CLI_COMMAND": "/usr/bin/claude"}):
+    def test_claude_api_key_from_env(self):
+        """Test Claude API key from environment variable."""
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-claude-key"}):
             with patch("sys.argv", ["test"]):
                 config = Config.from_args()
-                assert config.claude_command == "/usr/bin/claude"
-
-    def test_codex_command_from_env(self):
-        """Test Codex command from environment variable."""
-        with patch.dict(os.environ, {"CODEX_CLI_COMMAND": "/usr/bin/codex"}):
-            with patch("sys.argv", ["test"]):
-                config = Config.from_args()
-                assert config.codex_command == "/usr/bin/codex"
-
-    def test_claude_mcp_config_from_env(self):
-        """Test Claude MCP config from environment variable."""
-        with patch.dict(os.environ, {"CLAUDE_MCP_CONFIG": "/etc/mcp/config.json"}):
-            with patch("sys.argv", ["test"]):
-                config = Config.from_args()
-                assert config.claude_mcp_config == "/etc/mcp/config.json"
+                assert config.claude_api_key == "test-claude-key"
 
     def test_cli_args_override_env_vars(self):
         """Test that CLI arguments override environment variables."""

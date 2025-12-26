@@ -1,7 +1,15 @@
 """Send test MQTT alerts for testing purposes."""
-from mcp_mqtt_server import send_mqtt_message
+from config import Config
+from mqtt_client import MqttClient
+import tools
 
-send_mqtt_message(
+# Initialize tools with MQTT client
+config = Config()
+mqtt_client = MqttClient(config)
+mqtt_client.connect()
+tools.set_mqtt_client(mqtt_client)
+
+tools.send_mqtt_message(
     topic='alert/power',
     payload=(
         '{"device": "0xa4c138725761cac1", "type": "spike", '
@@ -10,10 +18,13 @@ send_mqtt_message(
     )
 )
 
-send_mqtt_message(
+tools.send_mqtt_message(
     topic='jokes/',
     payload=(
         '{"joke": "Why did the scarecrow win an award? '
         'Because he was outstanding in his field!"}'
     )
 )
+
+# Disconnect when done
+mqtt_client.disconnect()

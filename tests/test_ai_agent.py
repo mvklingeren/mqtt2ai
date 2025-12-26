@@ -1,7 +1,5 @@
 """Tests for the AiAgent module."""
-import json
 import os
-import subprocess
 import sys
 from unittest.mock import patch, MagicMock
 
@@ -55,82 +53,41 @@ class TestAiAgentInit:
         assert agent.config.claude_model == "test-model"
 
 
-class TestAiAgentGetCliCommand:
-    """Tests for _get_cli_command method."""
+class TestAiAgentProviders:
+    """Tests for AI provider configuration."""
 
-    def test_gemini_cli_command(self, config):
-        """Test Gemini CLI command generation."""
+    def test_gemini_provider_config(self, config):
+        """Test Gemini provider configuration."""
         config.ai_provider = "gemini"
-        config.gemini_command = "/path/to/gemini"
         config.gemini_model = "gemini-pro"
+        config.gemini_api_key = "test-key"
 
         agent = AiAgent(config)
-        cmd, args = agent._get_cli_command()
 
-        assert cmd == "/path/to/gemini"
-        assert "--yolo" in args
-        assert "--model" in args
-        assert "gemini-pro" in args
+        assert agent.config.ai_provider == "gemini"
+        assert agent.config.gemini_model == "gemini-pro"
 
-    def test_claude_cli_command(self, config):
-        """Test Claude CLI command generation."""
+    def test_claude_provider_config(self, config):
+        """Test Claude provider configuration."""
         config.ai_provider = "claude"
-        config.claude_command = "/path/to/claude"
         config.claude_model = "claude-3"
+        config.claude_api_key = "test-key"
 
         agent = AiAgent(config)
-        cmd, args = agent._get_cli_command()
 
-        assert cmd == "/path/to/claude"
-        assert "--dangerously-skip-permissions" in args
-        assert "--model" in args
-        assert "claude-3" in args
+        assert agent.config.ai_provider == "claude"
+        assert agent.config.claude_model == "claude-3"
 
-    def test_claude_cli_with_mcp_config(self, config):
-        """Test Claude CLI with MCP config."""
-        config.ai_provider = "claude"
-        config.claude_command = "/path/to/claude"
-        config.claude_mcp_config = "/path/to/mcp.json"
+    def test_openai_compatible_provider_config(self, config):
+        """Test OpenAI-compatible provider configuration."""
+        config.ai_provider = "openai-compatible"
+        config.openai_api_base = "https://api.example.com/v1"
+        config.openai_api_key = "test-key"
 
         agent = AiAgent(config)
-        cmd, args = agent._get_cli_command()
 
-        assert "--mcp-config" in args
-        assert "/path/to/mcp.json" in args
-
-    def test_claude_cli_without_mcp_config(self, config):
-        """Test Claude CLI without MCP config."""
-        config.ai_provider = "claude"
-        config.claude_command = "/path/to/claude"
-        config.claude_mcp_config = ""
-
-        agent = AiAgent(config)
-        cmd, args = agent._get_cli_command()
-
-        assert "--mcp-config" not in args
-
-    def test_codex_cli_command(self, config):
-        """Test Codex CLI command generation."""
-        config.ai_provider = "codex-openai"
-        config.codex_command = "/path/to/codex"
-        config.codex_model = "gpt-4"
-
-        agent = AiAgent(config)
-        cmd, args = agent._get_cli_command()
-
-        assert cmd == "/path/to/codex"
-        assert "exec" in args
-        assert "--model" in args
-        assert "gpt-4" in args
-        assert "--full-auto" in args
-
-    def test_default_provider_uses_gemini(self, config):
-        """Test that gemini provider works correctly."""
-        config.ai_provider = "gemini"
-        agent = AiAgent(config)
-        cmd, args = agent._get_cli_command()
-
-        assert "--yolo" in args  # Gemini-specific flag
+        assert agent.config.ai_provider == "openai-compatible"
+        assert agent.config.openai_api_base == "https://api.example.com/v1"
 
 
 class TestAiAgentPromptBuilder:
@@ -159,7 +116,8 @@ class TestAiAgentPromptBuilder:
 
         prompt = agent.prompt_builder.build("messages", kb, trigger_reason="test")
 
-        assert "Demo mode" in prompt
+        # Demo mode can be indicated as "Demo mode" or "DEMO MODE"
+        assert "DEMO MODE" in prompt.upper()
 
     def test_prompt_builder_no_demo_mode(self, config_with_temp_files):
         """Test that demo mode is not mentioned when disabled."""
@@ -230,116 +188,84 @@ class TestAiAgentPromptBuilder:
 class TestAiAgentExecuteAiCall:
     """Tests for _execute_ai_call method."""
 
-    def test_execute_ai_call_checks_cli_exists(self, config):
-        """Test that CLI existence is checked."""
-        config.ai_provider = "gemini"
-        config.gemini_command = "/nonexistent/path"
+    def test_execute_ai_call_routes_to_openai(self, config):
+        """Test that openai-compatible routes to OpenAI API call."""
+        config.ai_provider = "openai-compatible"
         agent = AiAgent(config)
 
-        with patch("shutil.which") as mock_which:
-            mock_which.return_value = None
+        with patch.object(agent, "_execute_openai_api_call") as mock_call:
+            agent._execute_ai_call("OPENAI-COMPATIBLE", "test prompt")
+            mock_call.assert_called_once()
+
+    def test_execute_ai_call_routes_to_gemini(self, config):
+        """Test that gemini routes to Gemini SDK call."""
+        config.ai_provider = "gemini"
+        agent = AiAgent(config)
+
+        with patch.object(agent, "_execute_gemini_sdk_call") as mock_call:
             agent._execute_ai_call("GEMINI", "test prompt")
-            mock_which.assert_called_once_with("/nonexistent/path")
+            mock_call.assert_called_once()
 
-    def test_execute_ai_call_runs_subprocess(self, config):
-        """Test that subprocess is called when CLI exists."""
-        config.ai_provider = "gemini"
+    def test_execute_ai_call_routes_to_claude(self, config):
+        """Test that claude routes to Claude SDK call."""
+        config.ai_provider = "claude"
         agent = AiAgent(config)
 
-        with patch("shutil.which") as mock_which:
-            mock_which.return_value = "/path/to/cli"
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="response", returncode=0)
-                agent._execute_ai_call("GEMINI", "test prompt")
-                mock_run.assert_called_once()
-
-    def test_execute_ai_call_handles_timeout(self, config):
-        """Test that timeout is handled gracefully."""
-        agent = AiAgent(config)
-
-        with patch("shutil.which") as mock_which:
-            mock_which.return_value = "/path/to/cli"
-            with patch("subprocess.run") as mock_run:
-                mock_run.side_effect = subprocess.TimeoutExpired("cmd", 120)
-                # Should not raise
-                agent._execute_ai_call("GEMINI", "test prompt")
-
-    def test_execute_ai_call_handles_subprocess_error(self, config):
-        """Test that subprocess errors are handled gracefully."""
-        agent = AiAgent(config)
-
-        with patch("shutil.which") as mock_which:
-            mock_which.return_value = "/path/to/cli"
-            with patch("subprocess.run") as mock_run:
-                error = subprocess.CalledProcessError(1, "cmd")
-                error.stderr = "error message"
-                mock_run.side_effect = error
-                # Should not raise
-                agent._execute_ai_call("GEMINI", "test prompt")
+        with patch.object(agent, "_execute_claude_sdk_call") as mock_call:
+            agent._execute_ai_call("CLAUDE", "test prompt")
+            mock_call.assert_called_once()
 
 
 class TestAiAgentTestConnection:
     """Tests for test_connection method."""
 
-    def test_test_connection_cli_success(self, config):
-        """Test successful CLI connection test."""
-        config.ai_provider = "gemini"  # Use CLI-based provider
+    def test_test_connection_gemini_success(self, config):
+        """Test successful Gemini SDK connection test."""
+        config.ai_provider = "gemini"
+        config.gemini_api_key = "test-key"
         agent = AiAgent(config)
 
-        with patch("shutil.which") as mock_which:
-            mock_which.return_value = "/path/to/cli"
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(
-                    stdout="Here's a joke about MQTT...",
-                    returncode=0
-                )
-                success, message = agent.test_connection()
+        with patch.object(agent, "_test_gemini_connection") as mock_test:
+            mock_test.return_value = (True, "Connected to Gemini API\n\nJoke: Test joke")
+            success, message = agent.test_connection()
 
-                assert success is True
-                assert "joke" in message.lower()
+            assert success is True
+            assert "Connected" in message
 
-    def test_test_connection_cli_not_found(self, config):
-        """Test connection test when CLI not found."""
-        config.ai_provider = "gemini"  # Use CLI-based provider
-        config.gemini_command = "/nonexistent/cli"
+    def test_test_connection_gemini_sdk_not_installed(self, config):
+        """Test Gemini connection test when SDK not installed."""
+        config.ai_provider = "gemini"
         agent = AiAgent(config)
 
-        with patch("shutil.which") as mock_which:
-            mock_which.return_value = None
+        with patch("ai_agent.GEMINI_AVAILABLE", False):
             success, message = agent.test_connection()
 
             assert success is False
-            assert "not found" in message.lower()
+            assert "not installed" in message.lower()
 
-    def test_test_connection_cli_timeout(self, config):
-        """Test CLI connection test timeout."""
-        config.ai_provider = "gemini"  # Use CLI-based provider
+    def test_test_connection_claude_success(self, config):
+        """Test successful Claude SDK connection test."""
+        config.ai_provider = "claude"
+        config.claude_api_key = "test-key"
         agent = AiAgent(config)
 
-        with patch("shutil.which") as mock_which:
-            mock_which.return_value = "/path/to/cli"
-            with patch("subprocess.run") as mock_run:
-                mock_run.side_effect = subprocess.TimeoutExpired("cmd", 60)
-                success, message = agent.test_connection()
+        with patch.object(agent, "_test_claude_connection") as mock_test:
+            mock_test.return_value = (True, "Connected to Claude API\n\nJoke: Test joke")
+            success, message = agent.test_connection()
 
-                assert success is False
-                assert "timed out" in message.lower()
+            assert success is True
+            assert "Connected" in message
 
-    def test_test_connection_cli_subprocess_error(self, config):
-        """Test CLI connection test subprocess error."""
-        config.ai_provider = "gemini"  # Use CLI-based provider
+    def test_test_connection_claude_sdk_not_installed(self, config):
+        """Test Claude connection test when SDK not installed."""
+        config.ai_provider = "claude"
         agent = AiAgent(config)
 
-        with patch("shutil.which") as mock_which:
-            mock_which.return_value = "/path/to/cli"
-            with patch("subprocess.run") as mock_run:
-                error = subprocess.CalledProcessError(1, "cmd")
-                error.stderr = "Authentication failed"
-                mock_run.side_effect = error
-                success, message = agent.test_connection()
+        with patch("ai_agent.ANTHROPIC_AVAILABLE", False):
+            success, message = agent.test_connection()
 
-                assert success is False
-                assert "failed" in message.lower()
+            assert success is False
+            assert "not installed" in message.lower()
 
 
 class TestAiAgentOpenAICompatible:
@@ -410,7 +336,7 @@ class TestAiAgentRunAnalysis:
 
     def test_run_analysis_builds_prompt_and_executes(self, config):
         """Test that run_analysis builds prompt and executes."""
-        config.ai_provider = "gemini"  # Use CLI-based provider that uses full prompt
+        config.ai_provider = "gemini"  # Use SDK-based provider that uses full prompt
         agent = AiAgent(config)
         kb = KnowledgeBase(config)
         kb.rulebook_content = "Test rulebook"

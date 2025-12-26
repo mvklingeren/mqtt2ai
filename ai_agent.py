@@ -1,11 +1,9 @@
 """AI Agent module for the MQTT AI Daemon.
 
-This module handles interaction with AI CLI tools (Gemini, Claude, or Codex)
-or OpenAI-compatible APIs (Ollama, LM Studio, etc.) for analyzing MQTT
+This module handles interaction with AI providers (OpenAI-compatible, Gemini, Claude)
+using their native Python SDKs with function calling for analyzing MQTT
 messages and making automation decisions.
 """
-import subprocess
-import shutil
 import json
 import logging
 import time
@@ -13,11 +11,27 @@ import os
 import hashlib
 from datetime import datetime
 
+# Import tools module directly (no circular import anymore)
+import tools
+
 try:
     from openai import OpenAI
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
+
+try:
+    from google import genai
+    from google.genai import types
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+
+try:
+    from anthropic import Anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
 
 from config import Config
 from knowledge_base import KnowledgeBase
@@ -71,15 +85,7 @@ def write_debug_output(debug_dir: str, url: str, body: dict, response: dict = No
     logging.debug("Debug output written to %s", filename)
 
 
-# Import MCP tool implementations for OpenAI function calling
-# pylint: disable=import-outside-toplevel
-def _get_mcp_tools():
-    """Lazy import of MCP tools to avoid circular imports."""
-    import mcp_mqtt_server as mcp
-    return mcp
-
-
-# OpenAI function definitions for MCP tools
+# OpenAI function definitions for tools
 OPENAI_TOOLS = [
     {
         "type": "function",
@@ -311,8 +317,6 @@ def _announce_ai_action(topic: str, payload: str) -> None:
     This allows pattern learning to know that this action was automated
     by the AI, not performed manually by a user.
     """
-    mcp = _get_mcp_tools()
-    
     announcement = {
         "source": "ai_analysis",
         "rule_id": None,
@@ -327,21 +331,19 @@ def _announce_ai_action(topic: str, payload: str) -> None:
     # Publish to the announce topic first
     announce_topic = "mqtt2ai/action/announce"
     try:
-        mcp.send_mqtt_message(announce_topic, json.dumps(announcement))
+        tools.send_mqtt_message(announce_topic, json.dumps(announcement))
     except Exception as e:  # pylint: disable=broad-exception-caught
         logging.warning("Failed to publish AI action announcement: %s", e)
 
 
 def execute_tool_call(tool_name: str, arguments: dict) -> str:
-    """Execute an MCP tool and return the result."""
+    """Execute a tool and return the result."""
     # Publish AI_TOOL_CALLED event for validation tracking
     from event_bus import event_bus, EventType
     event_bus.publish(EventType.AI_TOOL_CALLED, {
         "tool": tool_name,
         "arguments": arguments
     })
-    
-    mcp = _get_mcp_tools()
     
     # For send_mqtt_message, publish announcement first
     if tool_name == "send_mqtt_message":
@@ -353,30 +355,30 @@ def execute_tool_call(tool_name: str, arguments: dict) -> str:
             _announce_ai_action(topic, payload)
         
         try:
-            return mcp.send_mqtt_message(topic, payload)
+            return tools.send_mqtt_message(topic, payload)
         except Exception as e:  # pylint: disable=broad-exception-caught
             return f"Error executing {tool_name}: {e}"
     
     tool_map = {
-        "record_pattern_observation": lambda args: mcp.record_pattern_observation(
+        "record_pattern_observation": lambda args: tools.record_pattern_observation(
             args["trigger_topic"], args["trigger_field"],
             args["action_topic"], args["delay_seconds"]
         ),
-        "create_rule": lambda args: mcp.create_rule(
+        "create_rule": lambda args: tools.create_rule(
             args["rule_id"], args["trigger_topic"], args["trigger_field"],
             args["trigger_value"], args["action_topic"], args["action_payload"],
             args["avg_delay_seconds"], args["tolerance_seconds"]
         ),
-        "reject_pattern": lambda args: mcp.reject_pattern(
+        "reject_pattern": lambda args: tools.reject_pattern(
             args["trigger_topic"], args["trigger_field"],
             args["action_topic"], args.get("reason", "")
         ),
-        "report_undo": lambda args: mcp.report_undo(args["rule_id"]),
-        "toggle_rule": lambda args: mcp.toggle_rule(
+        "report_undo": lambda args: tools.report_undo(args["rule_id"]),
+        "toggle_rule": lambda args: tools.toggle_rule(
             args["rule_id"], args["enabled"]
         ),
-        "get_learned_rules": lambda args: mcp.get_learned_rules(),
-        "get_pending_patterns": lambda args: mcp.get_pending_patterns(),
+        "get_learned_rules": lambda args: tools.get_learned_rules(),
+        "get_pending_patterns": lambda args: tools.get_pending_patterns(),
         "raise_alert": lambda args: raise_alert(
             args["severity"], args["reason"], args.get("context")
         ),
@@ -452,7 +454,6 @@ def raise_alert(severity: float, reason: str, context: dict = None) -> str:
     
     # Medium priority: send notification via MQTT
     if severity < 0.7:
-        mcp = _get_mcp_tools()
         notification = {
             "severity": severity,
             "level": level_name,
@@ -461,7 +462,7 @@ def raise_alert(severity: float, reason: str, context: dict = None) -> str:
             "timestamp": datetime.now().isoformat()
         }
         try:
-            mcp.send_mqtt_message("mqtt2ai/alerts", json.dumps(notification))
+            tools.send_mqtt_message("mqtt2ai/alerts", json.dumps(notification))
             return f"Alert notification sent (severity {severity:.1f}): {reason}"
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("Failed to send alert notification: %s", e)
@@ -610,45 +611,11 @@ def timestamp() -> str:
 
 
 class AiAgent:
-    """Handles interaction with AI CLI tools (Gemini, Claude, or Codex)."""
+    """Handles interaction with AI providers via their Python SDKs."""
 
     def __init__(self, config: Config):
         self.config = config
         self.prompt_builder = PromptBuilder(config)
-
-    def _get_cli_command(self) -> tuple[str, list[str]]:
-        """Return the CLI executable path and arguments based on provider."""
-        if self.config.ai_provider == "claude":
-            cmd = self.config.claude_command
-            args = [
-                cmd,
-                "--dangerously-skip-permissions",
-                "--model", self.config.claude_model,
-            ]
-            # Add MCP config if specified
-            if self.config.claude_mcp_config:
-                args.extend(["--mcp-config", self.config.claude_mcp_config])
-            return cmd, args
-
-        if self.config.ai_provider == "codex-openai":
-            cmd = self.config.codex_command
-            args = [
-                cmd,
-                "exec",
-                "--model", self.config.codex_model,
-                "--full-auto",  # Auto-approve mode
-            ]
-            return cmd, args
-
-        # gemini (default)
-        cmd = self.config.gemini_command
-        args = [
-            cmd,
-            "--yolo",
-            "--model", self.config.gemini_model,
-            "--allowed-mcp-server-names", "mqtt-tools",
-        ]
-        return cmd, args
 
     def run_analysis(self, messages_snapshot: str, kb: KnowledgeBase,
                      trigger_reason: str, trigger_result=None):
@@ -689,11 +656,15 @@ class AiAgent:
 
     def _execute_ai_call(self, provider: str, prompt: str,
                          rules_count: int = 0, patterns_count: int = 0):
-        """Execute the AI call (CLI or API based on provider)."""
+        """Execute the AI call using the appropriate SDK based on provider."""
         if self.config.ai_provider == "openai-compatible":
             self._execute_openai_api_call(provider, prompt, rules_count, patterns_count)
+        elif self.config.ai_provider == "gemini":
+            self._execute_gemini_sdk_call(provider, prompt, rules_count, patterns_count)
+        elif self.config.ai_provider == "claude":
+            self._execute_claude_sdk_call(provider, prompt, rules_count, patterns_count)
         else:
-            self._execute_cli_call(provider, prompt)
+            logging.error("Unknown AI provider: %s", self.config.ai_provider)
 
     def _call_with_retry(self, client, model: str, messages: list,
                           tools: list, extra_body: dict = None,
@@ -1036,41 +1007,240 @@ class AiAgent:
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("OpenAI API error: %s", e)
 
-    def _execute_cli_call(self, provider: str, prompt: str):
-        """Execute the AI CLI call."""
-        try:
-            cli_cmd, cli_args = self._get_cli_command()
+    def _execute_gemini_sdk_call(self, provider: str, prompt: str,
+                                   rules_count: int = 0, patterns_count: int = 0):
+        """Execute AI call via Google Gemini SDK with function calling."""
+        if not GEMINI_AVAILABLE:
+            logging.error(
+                "Google GenAI SDK not installed. Run: pip install google-genai"
+            )
+            return
 
-            if not shutil.which(cli_cmd):
+        try:
+            # Initialize Gemini client
+            client = genai.Client(api_key=self.config.gemini_api_key)
+
+            cyan, reset = "\033[96m", "\033[0m"
+            purple = "\033[95m"
+            orange_bold = "\033[1;38;5;208m"
+
+            # Define tools for Gemini
+            gemini_tools = self._get_gemini_tool_declarations()
+
+            # Format prompt size for display
+            prompt_chars = len(prompt)
+            prompt_display = f"{prompt_chars/1000:.1f}K" if prompt_chars >= 1000 else str(prompt_chars)
+
+            logging.info(
+                "%s[AI Request] model=%s | prompt=%s chars | rules=%d patterns=%d%s",
+                orange_bold, self.config.gemini_model, prompt_display,
+                rules_count, patterns_count, reset
+            )
+
+            # System instruction
+            system_instruction = (
+                "You are a home automation AI assistant with access to MQTT tools. "
+                "Be brief and concise. "
+                "Analyze MQTT messages and take actions using the available functions. "
+                "When you detect trigger->action patterns, call record_pattern_observation. "
+                "After 3+ observations, call create_rule to formalize the automation. "
+                "Use send_mqtt_message to control devices directly when needed."
+            )
+
+            # Create config with tools
+            config = types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                tools=gemini_tools,
+            )
+
+            # Iterative tool calling loop
+            max_iterations = 10
+            contents = [prompt]
+
+            for iteration in range(max_iterations):
+                response = client.models.generate_content(
+                    model=self.config.gemini_model,
+                    contents=contents,
+                    config=config,
+                )
+
+                # Check for function calls
+                if response.candidates and response.candidates[0].content.parts:
+                    has_function_call = False
+                    for part in response.candidates[0].content.parts:
+                        if part.function_call:
+                            has_function_call = True
+                            func_name = part.function_call.name
+                            func_args = dict(part.function_call.args) if part.function_call.args else {}
+
+                            logging.info(
+                                "%s[Tool Call] %s(%s)%s",
+                                purple, func_name, json.dumps(func_args), reset
+                            )
+
+                            # Execute the tool
+                            result = execute_tool_call(func_name, func_args)
+                            logging.info(
+                                "%s[Tool Result] %s%s", purple, result, reset
+                            )
+
+                            # Add function response to continue conversation
+                            contents.append(response.candidates[0].content)
+                            contents.append(
+                                types.Content(
+                                    role="user",
+                                    parts=[types.Part.from_function_response(
+                                        name=func_name,
+                                        response={"result": result}
+                                    )]
+                                )
+                            )
+
+                    if not has_function_call:
+                        # No function calls, print final response
+                        if response.text:
+                            logging.info("%sAI Response: %s%s", cyan, response.text.strip(), reset)
+                        break
+                else:
+                    # No content, done
+                    if response.text:
+                        logging.info("%sAI Response: %s%s", cyan, response.text.strip(), reset)
+                    break
+            else:
+                logging.warning("Max tool call iterations reached")
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.error("Gemini API error: %s", e)
+
+    def _get_gemini_tool_declarations(self) -> list:
+        """Get Gemini-format tool declarations."""
+        # Convert OpenAI tool format to Gemini format
+        gemini_tools = []
+        for tool in OPENAI_TOOLS:
+            func = tool["function"]
+            gemini_tools.append(types.Tool(
+                function_declarations=[
+                    types.FunctionDeclaration(
+                        name=func["name"],
+                        description=func["description"],
+                        parameters=func["parameters"]
+                    )
+                ]
+            ))
+        return gemini_tools
+
+    def _execute_claude_sdk_call(self, provider: str, prompt: str,
+                                  rules_count: int = 0, patterns_count: int = 0):
+        """Execute AI call via Anthropic Claude SDK with function calling."""
+        if not ANTHROPIC_AVAILABLE:
                 logging.error(
-                    "Error: %s CLI not found or not executable at '%s'",
-                    provider, cli_cmd
+                "Anthropic SDK not installed. Run: pip install anthropic"
                 )
                 return
 
-            # Call AI CLI
-            result = subprocess.run(
-                cli_args,
-                input=prompt,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=120,
-            )
+        try:
+            # Initialize Anthropic client
+            client = Anthropic(api_key=self.config.claude_api_key)
 
-            response_text = result.stdout.strip()
             cyan, reset = "\033[96m", "\033[0m"
-            logging.info("%sAI Response: %s%s", cyan, response_text, reset)
+            purple = "\033[95m"
+            orange_bold = "\033[1;38;5;208m"
 
-        except subprocess.TimeoutExpired:
-            logging.error("%s CLI timed out after 120 seconds", provider)
-        except subprocess.CalledProcessError as e:
-            logging.error(
-                "%s CLI failed with exit code %d: %s",
-                provider, e.returncode, e.stderr
+            # Format prompt size for display
+            prompt_chars = len(prompt)
+            prompt_display = f"{prompt_chars/1000:.1f}K" if prompt_chars >= 1000 else str(prompt_chars)
+
+            logging.info(
+                "%s[AI Request] model=%s | prompt=%s chars | rules=%d patterns=%d%s",
+                orange_bold, self.config.claude_model, prompt_display,
+                rules_count, patterns_count, reset
             )
+
+            # System prompt
+            system_prompt = (
+                "You are a home automation AI assistant with access to MQTT tools. "
+                "Be brief and concise. "
+                "Analyze MQTT messages and take actions using the available tools. "
+                "When you detect trigger->action patterns, call record_pattern_observation. "
+                "After 3+ observations, call create_rule to formalize the automation. "
+                "Use send_mqtt_message to control devices directly when needed."
+            )
+
+            # Convert tools to Claude format
+            claude_tools = self._get_claude_tool_definitions()
+
+            # Build messages
+            messages = [{"role": "user", "content": prompt}]
+
+            max_iterations = 10
+            for iteration in range(max_iterations):
+                response = client.messages.create(
+                    model=self.config.claude_model,
+                    max_tokens=1024,
+                    system=system_prompt,
+                    tools=claude_tools,
+                    messages=messages,
+                )
+
+                # Process the response
+                has_tool_use = False
+                tool_results = []
+
+                for block in response.content:
+                    if block.type == "tool_use":
+                        has_tool_use = True
+                        func_name = block.name
+                        func_args = block.input if block.input else {}
+
+                        logging.info(
+                            "%s[Tool Call] %s(%s)%s",
+                            purple, func_name, json.dumps(func_args), reset
+                        )
+
+                        # Execute the tool
+                        result = execute_tool_call(func_name, func_args)
+                        logging.info(
+                            "%s[Tool Result] %s%s", purple, result, reset
+                        )
+
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result
+                        })
+
+                    elif block.type == "text" and block.text:
+                        logging.info("%sAI Response: %s%s", cyan, block.text.strip(), reset)
+
+                if has_tool_use:
+                    # Add assistant response and tool results to continue conversation
+                    messages.append({"role": "assistant", "content": response.content})
+                    messages.append({"role": "user", "content": tool_results})
+                else:
+                    # No more tool calls, done
+                    break
+
+                # Check stop reason
+                if response.stop_reason == "end_turn":
+                    break
+            else:
+                logging.warning("Max tool call iterations reached")
+
         except Exception as e:  # pylint: disable=broad-exception-caught
-            logging.error("Unexpected error during AI check: %s", e)
+            logging.error("Claude API error: %s", e)
+
+    def _get_claude_tool_definitions(self) -> list:
+        """Get Claude-format tool definitions."""
+        # Convert OpenAI tool format to Claude format
+        claude_tools = []
+        for tool in OPENAI_TOOLS:
+            func = tool["function"]
+            claude_tools.append({
+                "name": func["name"],
+                "description": func["description"],
+                "input_schema": func["parameters"]
+            })
+        return claude_tools
 
     def test_connection(self) -> tuple[bool, str]:
         """
@@ -1081,11 +1251,14 @@ class AiAgent:
         """
         provider = self.config.ai_provider.upper()
 
-        # Use OpenAI API for openai-compatible provider
         if self.config.ai_provider == "openai-compatible":
             return self._test_openai_connection(provider)
-
-        return self._test_cli_connection(provider)
+        elif self.config.ai_provider == "gemini":
+            return self._test_gemini_connection(provider)
+        elif self.config.ai_provider == "claude":
+            return self._test_claude_connection(provider)
+        else:
+            return False, f"Unknown AI provider: {self.config.ai_provider}"
 
     def _test_openai_connection(self, provider: str) -> tuple[bool, str]:
         """Test connection to OpenAI-compatible API with function calling."""
@@ -1180,36 +1353,119 @@ class AiAgent:
         except Exception as e:  # pylint: disable=broad-exception-caught
             return False, f"OpenAI API error: {e}"
 
-    def _test_cli_connection(self, provider: str) -> tuple[bool, str]:
-        """Test connection to CLI-based AI provider."""
-        cli_cmd, cli_args = self._get_cli_command()
-
-        # Check if CLI executable exists
-        if not shutil.which(cli_cmd):
-            return False, f"{provider} CLI not found or not executable at '{cli_cmd}'"
-
-        test_prompt = (
-            "This is a connection test. Write a short, funny joke and send it using "
-            "the send_mqtt_message tool to topic 'test/ai_joke'. "
-            "After sending, confirm what you did."
-        )
+    def _test_gemini_connection(self, provider: str) -> tuple[bool, str]:
+        """Test connection to Gemini API with function calling."""
+        if not GEMINI_AVAILABLE:
+            return False, "Google GenAI SDK not installed. Run: pip install google-genai"
 
         try:
-            result = subprocess.run(
-                cli_args,
-                input=test_prompt,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=60,
+            client = genai.Client(api_key=self.config.gemini_api_key)
+
+            # Test basic completion
+            response = client.models.generate_content(
+                model=self.config.gemini_model,
+                contents="Write a very short, funny one-liner joke.",
+            )
+            joke = response.text.strip() if response.text else "No response"
+
+            # Test function calling
+            tool_call_info = ""
+            try:
+                gemini_tools = self._get_gemini_tool_declarations()
+                config = types.GenerateContentConfig(tools=gemini_tools)
+
+                response = client.models.generate_content(
+                    model=self.config.gemini_model,
+                    contents="Send a test message with your joke to MQTT topic 'test/ai_joke'. Use the send_mqtt_message function.",
+                    config=config,
+                )
+
+                if response.candidates and response.candidates[0].content.parts:
+                    for part in response.candidates[0].content.parts:
+                        if part.function_call:
+                            func_name = part.function_call.name
+                            func_args = dict(part.function_call.args) if part.function_call.args else {}
+                            tool_call_info = f"\n\nFunction calling works! Called: {func_name}({json.dumps(func_args)})"
+
+                            # Execute the tool call
+                            try:
+                                result = execute_tool_call(func_name, func_args)
+                                tool_call_info += f"\nResult: {result}"
+                            except Exception as e:  # pylint: disable=broad-exception-caught
+                                tool_call_info += f"\nExecution error: {e}"
+                            break
+                    else:
+                        tool_call_info = "\n\nNote: Model did not use function calling for the test request."
+
+            except Exception as tool_err:  # pylint: disable=broad-exception-caught
+                tool_call_info = f"\n\nFunction calling test failed: {tool_err}"
+
+            return True, (
+                f"Connected to Gemini API using model {self.config.gemini_model}\n\n"
+                f"Joke: {joke}{tool_call_info}"
             )
 
-            response_text = result.stdout.strip()
-            return True, response_text
-
-        except subprocess.TimeoutExpired:
-            return False, f"{provider} CLI timed out after 60 seconds"
-        except subprocess.CalledProcessError as e:
-            return False, f"{provider} CLI failed with exit code {e.returncode}: {e.stderr}"
         except Exception as e:  # pylint: disable=broad-exception-caught
-            return False, f"Unexpected error: {e}"
+            return False, f"Gemini API error: {e}"
+
+    def _test_claude_connection(self, provider: str) -> tuple[bool, str]:
+        """Test connection to Claude API with function calling."""
+        if not ANTHROPIC_AVAILABLE:
+            return False, "Anthropic SDK not installed. Run: pip install anthropic"
+
+        try:
+            client = Anthropic(api_key=self.config.claude_api_key)
+
+            # Test basic completion
+            response = client.messages.create(
+                model=self.config.claude_model,
+                max_tokens=256,
+                messages=[{"role": "user", "content": "Write a very short, funny one-liner joke."}],
+            )
+            joke = ""
+            for block in response.content:
+                if hasattr(block, 'text'):
+                    joke = block.text.strip()
+                    break
+
+            # Test function calling
+            tool_call_info = ""
+            try:
+                claude_tools = self._get_claude_tool_definitions()
+
+                response = client.messages.create(
+                    model=self.config.claude_model,
+                    max_tokens=256,
+                    tools=claude_tools,
+                    messages=[{
+                        "role": "user",
+                        "content": "Send a test message with your joke to MQTT topic 'test/ai_joke'. Use the send_mqtt_message function."
+                    }],
+                )
+
+                for block in response.content:
+                    if block.type == "tool_use":
+                        func_name = block.name
+                        func_args = block.input if block.input else {}
+                        tool_call_info = f"\n\nFunction calling works! Called: {func_name}({json.dumps(func_args)})"
+
+                        # Execute the tool call
+                        try:
+                            result = execute_tool_call(func_name, func_args)
+                            tool_call_info += f"\nResult: {result}"
+                        except Exception as e:  # pylint: disable=broad-exception-caught
+                            tool_call_info += f"\nExecution error: {e}"
+                        break
+                else:
+                    tool_call_info = "\n\nNote: Model did not use function calling for the test request."
+
+            except Exception as tool_err:  # pylint: disable=broad-exception-caught
+                tool_call_info = f"\n\nFunction calling test failed: {tool_err}"
+
+            return True, (
+                f"Connected to Claude API using model {self.config.claude_model}\n\n"
+                f"Joke: {joke}{tool_call_info}"
+            )
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            return False, f"Claude API error: {e}"

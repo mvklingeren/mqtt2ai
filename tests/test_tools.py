@@ -1,4 +1,4 @@
-"""Tests for the MCP MQTT Server module."""
+"""Tests for the tools module."""
 import json
 import os
 import sys
@@ -12,14 +12,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 @pytest.fixture(autouse=True)
 def mock_mqtt_client():
-    """Mock the MqttClient used by mcp_mqtt_server."""
-    with patch("mcp_mqtt_server.mqtt_client") as mock_client:
-        mock_client.publish.return_value = True
+    """Mock the MQTT client used by tools module."""
+    mock_client = MagicMock()
+    mock_client.publish.return_value = True
+    
+    # Patch the module-level _mqtt_client
+    with patch("tools._mqtt_client", mock_client):
         yield mock_client
 
 
 # Import the functions we want to test (after setting up mocks)
-from mcp_mqtt_server import (
+from tools import (
     send_mqtt_message,
     create_rule,
     get_learned_rules,
@@ -35,6 +38,8 @@ from mcp_mqtt_server import (
     _clear_pending_pattern,
     _is_pattern_rejected,
     _add_rejected_pattern,
+    set_mqtt_client,
+    set_disable_new_rules,
     LEARNED_RULES_FILE,
     PENDING_PATTERNS_FILE,
     REJECTED_PATTERNS_FILE,
@@ -49,9 +54,9 @@ def mock_files(temp_dir, monkeypatch):
     rejected_patterns = os.path.join(temp_dir, "rejected_patterns.json")
 
     # Patch the module-level constants
-    monkeypatch.setattr("mcp_mqtt_server.LEARNED_RULES_FILE", learned_rules)
-    monkeypatch.setattr("mcp_mqtt_server.PENDING_PATTERNS_FILE", pending_patterns)
-    monkeypatch.setattr("mcp_mqtt_server.REJECTED_PATTERNS_FILE", rejected_patterns)
+    monkeypatch.setattr("tools.LEARNED_RULES_FILE", learned_rules)
+    monkeypatch.setattr("tools.PENDING_PATTERNS_FILE", pending_patterns)
+    monkeypatch.setattr("tools.REJECTED_PATTERNS_FILE", rejected_patterns)
 
     return {
         "learned_rules": learned_rules,
@@ -693,4 +698,31 @@ class TestHelperFunctions:
         # Should only have one pattern left
         assert len(data["patterns"]) == 1
         assert data["patterns"][0]["trigger_topic"] == "zigbee2mqtt/pir_b"
+
+
+class TestSetMqttClient:
+    """Tests for set_mqtt_client function."""
+
+    def test_set_mqtt_client(self):
+        """Test that set_mqtt_client properly sets the client."""
+        mock_client = MagicMock()
+        set_mqtt_client(mock_client)
+        
+        # Import the module-level variable to check it was set
+        import tools
+        assert tools._mqtt_client == mock_client
+
+
+class TestSetDisableNewRules:
+    """Tests for set_disable_new_rules function."""
+
+    def test_set_disable_new_rules(self):
+        """Test that set_disable_new_rules properly sets the flag."""
+        set_disable_new_rules(True)
+        
+        import tools
+        assert tools._disable_new_rules is True
+        
+        set_disable_new_rules(False)
+        assert tools._disable_new_rules is False
 

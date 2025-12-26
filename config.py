@@ -55,20 +55,19 @@ class Config:  # pylint: disable=too-many-instance-attributes
     rejected_patterns_file: str = "rejected_patterns.json"
 
     # AI Provider
-    ai_provider: str = "openai-compatible"  # "openai-compatible" (Groq), "gemini", "claude", "codex-openai"
+    ai_provider: str = "openai-compatible"  # "openai-compatible" (Groq), "gemini", "claude"
 
-    # Gemini
-    gemini_command: str = "/opt/homebrew/bin/gemini"
-    gemini_model: str = "gemini-2.5-flash"
+    # Gemini (Google AI)
+    gemini_model: str = "gemini-2.0-flash"
+    gemini_api_key: str = field(
+        default_factory=lambda: os.environ.get("GEMINI_API_KEY", "")
+    )
 
-    # Claude
-    claude_command: str = "/Users/mvklingeren/.nvm/versions/node/v20.15.0/bin/claude"
+    # Claude (Anthropic)
     claude_model: str = "claude-3-5-haiku-latest"
-    claude_mcp_config: str = ""  # Path to MCP config file for Claude
-
-    # Codex (OpenAI)
-    codex_command: str = "codex"  # Assumes npm global install puts it in PATH
-    codex_model: str = "gpt-5-nano" #"gpt-4.1-mini"
+    claude_api_key: str = field(
+        default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", "")
+    )
 
     # OpenAI-compatible API (Groq, Ollama, LM Studio, vLLM, etc.)
     openai_api_base: str = "https://api.groq.com/openai/v1"  # Groq (blazing fast!)
@@ -147,51 +146,33 @@ class Config:  # pylint: disable=too-many-instance-attributes
         # AI Provider
         parser.add_argument(
             "--ai-provider",
-            choices=["gemini", "claude", "codex-openai", "openai-compatible"],
+            choices=["gemini", "claude", "openai-compatible"],
             default=os.environ.get("AI_PROVIDER", "openai-compatible"),
-            help="AI provider to use (gemini, claude, codex-openai, or openai-compatible)"
+            help="AI provider to use (gemini, claude, or openai-compatible)"
         )
 
-        # Gemini CLI
-        parser.add_argument(
-            "--gemini-command",
-            default=os.environ.get("GEMINI_CLI_COMMAND", "/opt/homebrew/bin/gemini"),
-            help="Path to Gemini CLI"
-        )
+        # Gemini (Google AI)
         parser.add_argument(
             "--gemini-model",
-            default="gemini-2.5-flash",
+            default=os.environ.get("GEMINI_MODEL", "gemini-2.0-flash"),
             help="Gemini Model ID"
         )
-
-        # Claude CLI
-        claude_default = "/Users/mvklingeren/.nvm/versions/node/v20.15.0/bin/claude"
         parser.add_argument(
-            "--claude-command",
-            default=os.environ.get("CLAUDE_CLI_COMMAND", claude_default),
-            help="Path to Claude CLI"
+            "--gemini-api-key",
+            default=os.environ.get("GEMINI_API_KEY", ""),
+            help="API key for Google Gemini (uses GEMINI_API_KEY env var)"
         )
+
+        # Claude (Anthropic)
         parser.add_argument(
             "--claude-model",
-            default="claude-3-5-haiku-latest",
+            default=os.environ.get("CLAUDE_MODEL", "claude-3-5-haiku-latest"),
             help="Claude Model ID"
         )
         parser.add_argument(
-            "--claude-mcp-config",
-            default=os.environ.get("CLAUDE_MCP_CONFIG", ""),
-            help="Path to MCP config file for Claude"
-        )
-
-        # Codex CLI (OpenAI)
-        parser.add_argument(
-            "--codex-command",
-            default=os.environ.get("CODEX_CLI_COMMAND", "codex"),
-            help="Path to Codex CLI"
-        )
-        parser.add_argument(
-            "--codex-model",
-            default="gpt-5-nano",
-            help="Codex/OpenAI Model ID"
+            "--claude-api-key",
+            default=os.environ.get("ANTHROPIC_API_KEY", ""),
+            help="API key for Anthropic Claude (uses ANTHROPIC_API_KEY env var)"
         )
 
         # OpenAI-compatible API (Groq, Ollama, LM Studio, vLLM, etc.)
@@ -287,13 +268,10 @@ class Config:  # pylint: disable=too-many-instance-attributes
         c.mqtt_host = args.mqtt_host
         c.mqtt_port = args.mqtt_port
         c.ai_provider = args.ai_provider
-        c.gemini_command = args.gemini_command
         c.gemini_model = args.gemini_model
-        c.claude_command = args.claude_command
+        c.gemini_api_key = args.gemini_api_key
         c.claude_model = args.claude_model
-        c.claude_mcp_config = args.claude_mcp_config
-        c.codex_command = args.codex_command
-        c.codex_model = args.codex_model
+        c.claude_api_key = args.claude_api_key
         c.openai_api_base = args.openai_api_base
         c.openai_api_key = args.openai_api_key
         # Parse comma-separated models list, use defaults if empty

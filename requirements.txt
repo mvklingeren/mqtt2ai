@@ -3,11 +3,15 @@
 # MQTT client library for persistent connections
 paho-mqtt>=2.0.0
 
-# MCP (Model Context Protocol) server for AI tool integration
-mcp>=1.0.0
-
+# AI Provider SDKs
 # OpenAI SDK for OpenAI-compatible APIs (Groq, Ollama, LM Studio, etc.)
 openai>=1.0.0
+
+# Google Gemini SDK
+google-genai>=1.0.0
+
+# Anthropic Claude SDK
+anthropic>=0.40.0
 
 # Environment variable management
 python-dotenv>=1.0.0

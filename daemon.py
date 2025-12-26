@@ -25,6 +25,7 @@ from mqtt_simulator import MqttSimulator
 from ai_agent import AiAgent, set_alert_agent
 from trigger_analyzer import TriggerAnalyzer, TriggerResult
 from event_bus import event_bus, EventType
+import tools
 
 VERSION = "0.2"
 
@@ -341,6 +342,10 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             config.filtered_triggers_file,
             simulation_mode=bool(config.simulation_file)
         )
+        
+        # Inject MQTT client and config into tools module
+        tools.set_mqtt_client(self.mqtt)
+        tools.set_disable_new_rules(config.disable_new_rules)
         
         # Rule engine for direct execution of learned rules (no AI needed)
         self.rule_engine = RuleEngine(self.mqtt, self.kb)
