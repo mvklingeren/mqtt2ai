@@ -98,18 +98,20 @@ class DeviceStateTracker:
         the Collector Thread (writer) and AI Worker Thread (reader).
     """
     
-    def __init__(self, pattern: str = "zigbee2mqtt/*"):
+    def __init__(self, pattern: str = "zigbee2mqtt/*", max_devices: int = 9999):
         """Initialize the tracker with a topic pattern.
         
         Args:
             pattern: Glob pattern for topics to track (e.g., "zigbee2mqtt/*")
+            max_devices: Maximum number of devices to track (LRU eviction when exceeded)
         """
         self.pattern = pattern
+        self.max_devices = max_devices
         # Convert glob to regex for matching
         # zigbee2mqtt/* -> ^zigbee2mqtt/[^/]+$
         regex_pattern = pattern.replace("*", "[^/]+")
         self._pattern_re = re.compile(f"^{regex_pattern}$")
-        self._states: dict[str, dict] = {}
+        self._states: dict[str, tuple[dict, float]] = {}  # topic -> (state, timestamp)
         self._lock = threading.Lock()
     
     def should_track(self, topic: str) -> bool:
@@ -139,8 +141,13 @@ class DeviceStateTracker:
             state = json.loads(payload)
             if isinstance(state, dict):
                 with self._lock:
-                    # Store a copy to prevent external mutation
-                    self._states[topic] = dict(state)
+                    # If topic is new and we're at capacity, evict LRU entry
+                    if topic not in self._states and len(self._states) >= self.max_devices:
+                        # Evict least recently used entry (oldest timestamp)
+                        oldest_topic = min(self._states, key=lambda t: self._states[t][1])
+                        del self._states[oldest_topic]
+                    # Store state with timestamp (copy to prevent external mutation)
+                    self._states[topic] = (dict(state), time.time())
         except json.JSONDecodeError:
             pass  # Ignore non-JSON payloads
     
@@ -154,9 +161,9 @@ class DeviceStateTracker:
             DeviceStateSnapshot with deep-copied states and timestamp
         """
         with self._lock:
-            # Deep copy all states to ensure immutability
+            # Deep copy all states to ensure immutability (extract state from tuple)
             states_copy = {
-                topic: dict(state) for topic, state in self._states.items()
+                topic: dict(state) for topic, (state, _timestamp) in self._states.items()
             }
             return DeviceStateSnapshot(
                 states=states_copy,
@@ -172,8 +179,8 @@ class DeviceStateTracker:
             Dict mapping topic -> last known state (deep copied)
         """
         with self._lock:
-            # Deep copy to prevent mutation of returned dicts
-            return {topic: dict(state) for topic, state in self._states.items()}
+            # Deep copy to prevent mutation of returned dicts (extract state from tuple)
+            return {topic: dict(state) for topic, (state, _timestamp) in self._states.items()}
     
     def get_state(self, topic: str) -> Optional[dict]:
         """Get a copy of the last known state for a specific topic.
@@ -185,8 +192,11 @@ class DeviceStateTracker:
             A copy of the last known state dict, or None if not tracked
         """
         with self._lock:
-            state = self._states.get(topic)
-            return dict(state) if state else None
+            entry = self._states.get(topic)
+            if entry:
+                state, _timestamp = entry
+                return dict(state)
+            return None
     
     def get_device_count(self) -> int:
         """Get the number of tracked devices."""
