@@ -159,6 +159,9 @@ class PromptBuilder:
                     f"{trigger.get('value', '?')}] → {action.get('topic', '?')}\n"
                 )
 
+        # Check for security-relevant patterns in messages
+        security_alert = self._check_security_patterns(compressed_messages)
+
         prompt = f"""{safety}{demo}Analyze MQTT for automation patterns.
 
 {rules_summary}
@@ -166,14 +169,31 @@ Messages:
 {compressed_messages}
 
 Tasks (in order):
-1. LEARN: If trigger event followed by /set action within 30s → record_pattern_observation
+1. SECURITY: Check for suspicious patterns (motion sensor + window/door opens within minutes)
+   - If found: call raise_alert(severity, reason) where severity 0.7-1.0 for break-in risk
+   - Perimeter motion followed by entry point breach = raise_alert(0.9, "Motion + entry breach")
+2. LEARN: If trigger event followed by /set action within 30s → record_pattern_observation
    - Use the trigger VALUE that CAUSED the action (e.g., occupancy:true, NOT false)
    - Skip if rule already exists for this trigger→action
    - DO NOT send any MQTT messages during learning
-2. EXECUTE: ONLY if an ENABLED rule matches the CURRENT trigger → send_mqtt_message
-3. CREATE: After 3+ observations of same pattern → create_rule
-"""
+3. EXECUTE: ONLY if an ENABLED rule matches the CURRENT trigger → send_mqtt_message
+4. CREATE: After 3+ observations of same pattern → create_rule
+{security_alert}"""
         return prompt
+
+    def _check_security_patterns(self, messages: str) -> str:
+        """Check messages for security-relevant patterns and return alert hint."""
+        # Look for patterns like parking/outdoor PIR + window/door contact
+        has_perimeter_motion = any(x in messages.lower() for x in [
+            "parking", "outdoor", "driveway", "garden", "perimeter"
+        ]) and "occupancy" in messages.lower()
+        
+        has_entry_breach = "contact" in messages.lower() and "false" in messages.lower()
+        
+        if has_perimeter_motion and has_entry_breach:
+            return "\n⚠️ SECURITY: Detected perimeter motion + entry breach pattern. Consider raise_alert()."
+        
+        return ""
 
     def _extract_trigger_topic(
         self,

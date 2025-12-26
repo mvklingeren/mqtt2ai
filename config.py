@@ -43,6 +43,9 @@ class Config:  # pylint: disable=too-many-instance-attributes
     ai_check_threshold: int = 300  # Trigger AI after 300 messages
     disable_interval_trigger: bool = False  # Disable time-based AI triggers
     disable_threshold_trigger: bool = False  # Disable message count-based AI triggers
+    
+    # Device state tracking for alert system
+    device_track_pattern: str = "zigbee2mqtt/*"  # Glob pattern for topics to track
 
     # Files
     rulebook_file: str = "rulebook.md"

@@ -267,15 +267,41 @@ OPENAI_TOOLS = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "raise_alert",
+            "description": "Raise a security alert with severity 0.0-1.0. Use for suspicious events like motion+window at night. Low (0.0-0.3): log only. Medium (0.3-0.7): notification. High (0.7-1.0): AI takes action with device context.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "severity": {
+                        "type": "number",
+                        "description": "Alert severity from 0.0 to 1.0. Use 0.9 for break-in scenarios, 0.5 for suspicious activity, 0.2 for informational."
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Human-readable description of why the alert is being raised (e.g., 'Motion detected on parking lot followed by window sensor at 04:30')"
+                    },
+                    "context": {
+                        "type": "object",
+                        "description": "Optional additional context like trigger topic, field values, timestamps"
+                    }
+                },
+                "required": ["severity", "reason"]
+            }
+        }
     }
 ]
 
 # Reduced tool set for rate-limited providers (Groq free tier, Ollama)
-# Full 8 tools is ~4K tokens, this set is ~1K tokens
+# Full 9 tools is ~4K tokens, this set is ~1.2K tokens
 OPENAI_TOOLS_MINIMAL = [
     OPENAI_TOOLS[0],  # send_mqtt_message
     OPENAI_TOOLS[1],  # record_pattern_observation
     OPENAI_TOOLS[2],  # create_rule
+    OPENAI_TOOLS[8],  # raise_alert - for security events
 ]
 
 
@@ -351,6 +377,9 @@ def execute_tool_call(tool_name: str, arguments: dict) -> str:
         ),
         "get_learned_rules": lambda args: mcp.get_learned_rules(),
         "get_pending_patterns": lambda args: mcp.get_pending_patterns(),
+        "raise_alert": lambda args: raise_alert(
+            args["severity"], args["reason"], args.get("context")
+        ),
     }
     
     if tool_name in tool_map:
@@ -359,6 +388,220 @@ def execute_tool_call(tool_name: str, arguments: dict) -> str:
         except Exception as e:  # pylint: disable=broad-exception-caught
             return f"Error executing {tool_name}: {e}"
     return f"Unknown tool: {tool_name}"
+
+
+# Global reference to AiAgent for alert system (set by daemon)
+_alert_agent: 'AiAgent' = None
+_alert_config: Config = None
+
+
+def set_alert_agent(agent: 'AiAgent', config: Config) -> None:
+    """Set the global AI agent for alert system use."""
+    global _alert_agent, _alert_config
+    _alert_agent = agent
+    _alert_config = config
+
+
+def raise_alert(severity: float, reason: str, context: dict = None) -> str:
+    """Raise an alert with severity 0.0-1.0.
+    
+    This function is called by the AI (via tool call) or directly by rules
+    when a security-relevant event is detected.
+    
+    Severity levels:
+    - 0.0-0.3: Low priority (log only)
+    - 0.3-0.7: Medium priority (notification via MQTT)
+    - 0.7-1.0: High priority (AI decides action with full device context)
+    
+    Args:
+        severity: Alert severity from 0.0 to 1.0
+        reason: Human-readable reason for the alert
+        context: Optional additional context dict
+        
+    Returns:
+        Status message about the alert handling
+    """
+    from daemon import get_device_tracker
+    
+    # Clamp severity to valid range
+    severity = max(0.0, min(1.0, severity))
+    
+    # Color coding for logs
+    if severity >= 0.7:
+        color = "\033[91m"  # Red
+        level_name = "HIGH"
+    elif severity >= 0.3:
+        color = "\033[93m"  # Yellow
+        level_name = "MEDIUM"
+    else:
+        color = "\033[94m"  # Blue
+        level_name = "LOW"
+    reset = "\033[0m"
+    
+    logging.info(
+        "%s[ALERT %s (%.1f)] %s%s",
+        color, level_name, severity, reason, reset
+    )
+    
+    if context:
+        logging.debug("Alert context: %s", json.dumps(context))
+    
+    # Low priority: just log
+    if severity < 0.3:
+        return f"Alert logged (severity {severity:.1f}): {reason}"
+    
+    # Medium priority: send notification via MQTT
+    if severity < 0.7:
+        mcp = _get_mcp_tools()
+        notification = {
+            "severity": severity,
+            "level": level_name,
+            "reason": reason,
+            "context": context,
+            "timestamp": datetime.now().isoformat()
+        }
+        try:
+            mcp.send_mqtt_message("mqtt2ai/alerts", json.dumps(notification))
+            return f"Alert notification sent (severity {severity:.1f}): {reason}"
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.error("Failed to send alert notification: %s", e)
+            return f"Alert logged but notification failed: {e}"
+    
+    # High priority: AI decides action with full device context
+    if _alert_agent is None or _alert_config is None:
+        logging.error("Alert agent not initialized - cannot process high severity alert")
+        return f"Alert logged but AI not available (severity {severity:.1f}): {reason}"
+    
+    # Get all device states for context
+    device_tracker = get_device_tracker()
+    device_states = device_tracker.get_all_states() if device_tracker else {}
+    
+    # Build alert prompt for AI
+    alert_prompt = _build_alert_prompt(severity, reason, context, device_states)
+    
+    logging.info(
+        "%s[ALERT AI] Triggering AI response for high-severity alert...%s",
+        color, reset
+    )
+    
+    # Execute AI call synchronously for alerts (they need immediate response)
+    try:
+        _execute_alert_ai_call(_alert_agent, alert_prompt)
+        return f"Alert processed by AI (severity {severity:.1f}): {reason}"
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logging.error("Alert AI call failed: %s", e)
+        return f"Alert AI call failed: {e}"
+
+
+def _build_alert_prompt(
+    severity: float, reason: str, context: dict, device_states: dict
+) -> str:
+    """Build the prompt for an alert AI call."""
+    lines = [
+        "# SECURITY ALERT",
+        f"Severity: {severity:.1f} (HIGH PRIORITY)",
+        f"Reason: {reason}",
+        "",
+    ]
+    
+    if context:
+        lines.append("## Alert Context")
+        lines.append(json.dumps(context, indent=2))
+        lines.append("")
+    
+    lines.append("## Available Devices and Current States")
+    lines.append("Use these to take appropriate action (e.g., activate sirens, turn on lights).")
+    lines.append("")
+    
+    if device_states:
+        for topic, state in sorted(device_states.items()):
+            # Compact state representation
+            state_str = json.dumps(state, separators=(',', ':'))
+            if len(state_str) > 100:
+                # Truncate long states
+                state_str = state_str[:97] + "..."
+            lines.append(f"- {topic}: {state_str}")
+    else:
+        lines.append("(No device states available)")
+    
+    lines.append("")
+    lines.append("## Instructions")
+    lines.append("Based on the alert severity and available devices:")
+    lines.append("1. Identify appropriate response devices (sirens, lights, notifications)")
+    lines.append("2. Use send_mqtt_message to activate them with correct payloads")
+    lines.append("3. For sirens/alarms, set state to ON or true")
+    lines.append("4. For lights, consider turning them ON at full brightness")
+    lines.append("")
+    lines.append("Take action NOW to respond to this security alert.")
+    
+    return "\n".join(lines)
+
+
+def _execute_alert_ai_call(agent: 'AiAgent', prompt: str) -> None:
+    """Execute an AI call for alert response."""
+    if not OPENAI_AVAILABLE:
+        logging.error("OpenAI SDK not available for alert AI call")
+        return
+    
+    try:
+        import httpx
+        client = OpenAI(
+            base_url=agent.config.openai_api_base,
+            api_key=agent.config.openai_api_key,
+            timeout=httpx.Timeout(60.0, connect=10.0),
+        )
+        
+        # Use minimal tools (just send_mqtt_message) for alerts
+        alert_tools = [OPENAI_TOOLS[0]]  # send_mqtt_message only
+        
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a security response AI. Your job is to respond to alerts "
+                    "by activating appropriate devices. Be decisive and act immediately. "
+                    "Use send_mqtt_message to control devices."
+                )
+            },
+            {"role": "user", "content": prompt}
+        ]
+        
+        current_model = agent.config.get_next_model()
+        cyan, reset = "\033[96m", "\033[0m"
+        purple = "\033[95m"
+        
+        # Single iteration for alerts (fast response)
+        response = client.chat.completions.create(
+            model=current_model,
+            messages=messages,
+            tools=alert_tools,
+            tool_choice="auto",
+        )
+        
+        message = response.choices[0].message
+        
+        if message.tool_calls:
+            for tool_call in message.tool_calls:
+                func_name = tool_call.function.name
+                try:
+                    func_args = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError:
+                    func_args = {}
+                
+                logging.info(
+                    "%s[Alert Tool] %s(%s)%s",
+                    purple, func_name, json.dumps(func_args), reset
+                )
+                
+                result = execute_tool_call(func_name, func_args)
+                logging.info("%s[Alert Result] %s%s", purple, result, reset)
+        
+        if message.content:
+            logging.info("%sAlert AI: %s%s", cyan, message.content.strip(), reset)
+            
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logging.error("Alert AI call error: %s", e)
+        raise
 
 
 def timestamp() -> str:

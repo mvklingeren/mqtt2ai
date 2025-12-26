@@ -22,7 +22,7 @@ from config import Config
 from knowledge_base import KnowledgeBase
 from mqtt_client import MqttClient
 from mqtt_simulator import MqttSimulator
-from ai_agent import AiAgent
+from ai_agent import AiAgent, set_alert_agent
 from trigger_analyzer import TriggerAnalyzer, TriggerResult
 from event_bus import event_bus, EventType
 
@@ -43,6 +43,104 @@ class AiRequest:
     snapshot: str
     reason: str
     trigger_result: Optional[TriggerResult] = None
+
+
+import fnmatch
+import re
+
+
+class DeviceStateTracker:
+    """Tracks the last known state of devices matching a topic pattern.
+    
+    This provides an in-memory cache of device states that can be used
+    by the alert system to give the AI full context about available devices.
+    """
+    
+    def __init__(self, pattern: str = "zigbee2mqtt/*"):
+        """Initialize the tracker with a topic pattern.
+        
+        Args:
+            pattern: Glob pattern for topics to track (e.g., "zigbee2mqtt/*")
+        """
+        self.pattern = pattern
+        # Convert glob to regex for matching
+        # zigbee2mqtt/* -> ^zigbee2mqtt/[^/]+$
+        regex_pattern = pattern.replace("*", "[^/]+")
+        self._pattern_re = re.compile(f"^{regex_pattern}$")
+        self._states: dict[str, dict] = {}
+        self._lock = threading.Lock()
+    
+    def should_track(self, topic: str) -> bool:
+        """Check if a topic should be tracked.
+        
+        Excludes:
+        - /set and /get suffixes (commands, not state)
+        - bridge/ topics (not device state)
+        """
+        if topic.endswith("/set") or topic.endswith("/get"):
+            return False
+        if "/bridge/" in topic:
+            return False
+        return bool(self._pattern_re.match(topic))
+    
+    def update(self, topic: str, payload: str) -> None:
+        """Update the state for a device topic.
+        
+        Args:
+            topic: The MQTT topic
+            payload: The raw payload string (JSON expected)
+        """
+        if not self.should_track(topic):
+            return
+        
+        try:
+            state = json.loads(payload)
+            if isinstance(state, dict):
+                with self._lock:
+                    self._states[topic] = state
+        except json.JSONDecodeError:
+            pass  # Ignore non-JSON payloads
+    
+    def get_all_states(self) -> dict[str, dict]:
+        """Get a copy of all tracked device states.
+        
+        Returns:
+            Dict mapping topic -> last known state
+        """
+        with self._lock:
+            return dict(self._states)
+    
+    def get_state(self, topic: str) -> Optional[dict]:
+        """Get the last known state for a specific topic.
+        
+        Args:
+            topic: The MQTT topic
+            
+        Returns:
+            The last known state dict, or None if not tracked
+        """
+        with self._lock:
+            return self._states.get(topic)
+    
+    def get_device_count(self) -> int:
+        """Get the number of tracked devices."""
+        with self._lock:
+            return len(self._states)
+
+
+# Global device tracker instance (initialized by daemon)
+_device_tracker: Optional['DeviceStateTracker'] = None
+
+
+def get_device_tracker() -> Optional['DeviceStateTracker']:
+    """Get the global device state tracker instance."""
+    return _device_tracker
+
+
+def set_device_tracker(tracker: 'DeviceStateTracker') -> None:
+    """Set the global device state tracker instance."""
+    global _device_tracker
+    _device_tracker = tracker
 
 
 class RuleEngine:
@@ -241,6 +339,13 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         
         # Rule engine for direct execution of learned rules (no AI needed)
         self.rule_engine = RuleEngine(self.mqtt, self.kb)
+        
+        # Device state tracker for alert system context
+        self.device_tracker = DeviceStateTracker(config.device_track_pattern)
+        set_device_tracker(self.device_tracker)  # Make globally accessible
+        
+        # Set up alert agent for raise_alert() function
+        set_alert_agent(self.ai, config)
 
         self.messages_deque: Deque[str] = collections.deque(maxlen=config.max_messages)
         self.new_message_count = 0
@@ -286,6 +391,12 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         logging.info(
             "Rule engine initialized: %d rules (%d enabled for direct execution)",
             rules_count, enabled_count
+        )
+        
+        # Log device tracker status
+        logging.info(
+            "Device tracker initialized: pattern='%s'",
+            self.config.device_track_pattern
         )
 
         # Start AI worker thread (processes AI requests asynchronously)
@@ -601,7 +712,10 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                     else:
                         print(f"{timestamp()} {line}")
 
-                # 6. Store
+                # 6. Update device tracker
+                self.device_tracker.update(current_topic, current_payload)
+
+                # 7. Store
                 with self.lock:
                     self.messages_deque.append(f"{timestamp()} {line}")
                     self.new_message_count += 1
@@ -721,6 +835,9 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                             print(f"{timestamp()} {compressed}")
                     else:
                         print(f"{timestamp()} {line}")
+
+                # Update device tracker
+                self.device_tracker.update(current_topic, current_payload)
 
                 # Store
                 with self.lock:

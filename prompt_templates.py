@@ -5,13 +5,29 @@ COMPACT_RULEBOOK = """## Core Rules
 If a trigger->action pair is in SKIP PATTERNS, do NOT call record_pattern_observation or create_rule.
 This saves tokens and prevents redundant operations.
 
-### Safety (CRITICAL)
-- smoke:true → Activate siren, notify, turn on ALL known lights
-- water_leak:true → Activate siren, notify
-- temperature > 50°C → Activate siren, notify
+### Safety (CRITICAL) - Use raise_alert()
+- smoke:true → raise_alert(1.0, "Smoke detected", {topic, field})
+- water_leak:true → raise_alert(1.0, "Water leak detected", {topic})
+- temperature > 50°C → raise_alert(0.9, "High temperature", {topic, value})
 
-### Security (when armed)
-- Door/window opened (contact:false) or Motion (occupancy:true) → Activate siren + notify
+### Security Awareness - Use raise_alert()
+Detect suspicious patterns and raise alerts instead of direct device control.
+The alert system has full device context and will decide appropriate actions.
+
+SUSPICIOUS PATTERNS (use raise_alert with high severity 0.7-1.0):
+- Motion sensor + window/door open within 5 min, especially at night (00:00-06:00)
+  → raise_alert(0.9, "Motion followed by entry point breach at {time}")
+- Multiple motion sensors in sequence (perimeter → interior) within minutes
+  → raise_alert(0.85, "Sequential motion detected: perimeter to interior")
+- Door/window opened while system armed
+  → raise_alert(0.9, "Entry point breached while armed")
+
+INFORMATIONAL (use raise_alert with low severity 0.1-0.3):
+- Unusual device activity times
+  → raise_alert(0.2, "Device activity at unusual hour")
+
+DO NOT directly send_mqtt_message to sirens/alarms for security events.
+Use raise_alert() and let the alert AI decide based on full device context.
 
 ### Pattern Learning
 1. [SKIP-LEARNED] messages have rules - DO NOT call record_pattern_observation
