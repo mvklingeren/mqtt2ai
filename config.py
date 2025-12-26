@@ -40,7 +40,9 @@ class Config:  # pylint: disable=too-many-instance-attributes
     )
     max_messages: int = 1000  # Keep last 500 messages in buffer
     ai_check_interval: int = 600  # 10 minutes
-    ai_check_threshold: int = 300  # Trigger AI after 200 messages
+    ai_check_threshold: int = 300  # Trigger AI after 300 messages
+    disable_interval_trigger: bool = False  # Disable time-based AI triggers
+    disable_threshold_trigger: bool = False  # Disable message count-based AI triggers
 
     # Files
     rulebook_file: str = "rulebook.md"
@@ -112,6 +114,10 @@ class Config:  # pylint: disable=too-many-instance-attributes
     # Simulation mode
     simulation_file: Optional[str] = None  # Path to simulation scenario JSON file
     simulation_speed: Optional[float] = None  # Override speed multiplier for simulation
+
+    # Test mode - validate assertions and exit with pass/fail status
+    test_mode: bool = False
+    test_report_file: Optional[str] = None  # Path to write JSON test report
 
     # Debug mode - write HTTP call details to files
     debug_output: bool = False
@@ -247,9 +253,29 @@ class Config:  # pylint: disable=too-many-instance-attributes
             help="Override speed multiplier for simulation (e.g., 10 = 10x faster)"
         )
         parser.add_argument(
+            "--test",
+            action="store_true",
+            help="Run in test mode: validate assertions from scenario and exit with status"
+        )
+        parser.add_argument(
+            "--report",
+            metavar="FILE",
+            help="Write JSON test report to specified file (requires --test)"
+        )
+        parser.add_argument(
             "--debug",
             action="store_true",
             help="Write HTTP call details (URL, body, content-length) to debug-output/ directory"
+        )
+        parser.add_argument(
+            "--disable-interval-trigger",
+            action="store_true",
+            help="Disable time-based AI triggers (interval checks)"
+        )
+        parser.add_argument(
+            "--disable-threshold-trigger",
+            action="store_true",
+            help="Disable message count-based AI triggers (threshold checks)"
         )
 
         args = parser.parse_args()
@@ -279,5 +305,9 @@ class Config:  # pylint: disable=too-many-instance-attributes
         c.disable_new_rules = args.disable_new_rules
         c.simulation_file = args.simulation
         c.simulation_speed = args.simulation_speed
+        c.test_mode = args.test
+        c.test_report_file = args.report
         c.debug_output = args.debug
+        c.disable_interval_trigger = args.disable_interval_trigger
+        c.disable_threshold_trigger = args.disable_threshold_trigger
         return c

@@ -5,66 +5,321 @@
     "user_delay": 2,
     "between_events": 15
   },
+  "assertions": {
+    "pir_triggers": {
+      "type": "trigger_count",
+      "topic": "zigbee2mqtt/hallway_pir",
+      "field": "occupancy",
+      "min": 3,
+      "_comment": "PIR should trigger at least 3 times (once per pattern occurrence)"
+    },
+    "door_triggers": {
+      "type": "trigger_count",
+      "topic": "zigbee2mqtt/front_door",
+      "field": "contact",
+      "min": 3,
+      "_comment": "Door sensor should trigger at least 3 times"
+    },
+    "power_triggers": {
+      "type": "trigger_count",
+      "topic": "zigbee2mqtt/washing_machine_plug",
+      "field": "power",
+      "min": 3,
+      "_comment": "Power sensor should trigger at least 3 times on surges"
+    },
+    "patterns_observed": {
+      "type": "tool_called",
+      "tool": "record_pattern_observation",
+      "count_min": 1,
+      "_comment": "AI should observe at least one pattern"
+    },
+    "rules_created": {
+      "type": "tool_called",
+      "tool": "create_rule",
+      "count_min": 1,
+      "_comment": "AI should create at least one automation rule"
+    },
+    "final_rules_file": {
+      "type": "file_state",
+      "file": "learned_rules.json",
+      "rules_min": 1,
+      "_comment": "At least 1 rule should be saved to learned_rules.json"
+    }
+  },
   "messages": [
-    {"_comment": "========== PATTERN A: PIR motion → hallway light (occurrence 1) =========="},
-    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": true, "battery": 85, "linkquality": 120}, "delay": 0},
-    {"topic": "zigbee2mqtt/hallway_light/set", "payload": {"state": "ON"}, "delay": "{{user_delay}}"},
-    {"topic": "zigbee2mqtt/hallway_light", "payload": {"state": "ON", "brightness": 254}, "delay": 0.1},
-    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": false, "battery": 85, "linkquality": 120}, "delay": 5},
+    {
+      "_comment": "========== PATTERN A: PIR motion → hallway light (occurrence 1) =========="
+    },
+    {
+      "topic": "zigbee2mqtt/hallway_pir",
+      "payload": { "occupancy": true, "battery": 85, "linkquality": 120 },
+      "delay": 0
+    },
+    {
+      "topic": "zigbee2mqtt/hallway_light/set",
+      "payload": { "state": "ON" },
+      "delay": "{{user_delay}}"
+    },
+    {
+      "topic": "zigbee2mqtt/hallway_light",
+      "payload": { "state": "ON", "brightness": 254 },
+      "delay": 0.1
+    },
+    {
+      "topic": "zigbee2mqtt/hallway_pir",
+      "payload": { "occupancy": false, "battery": 85, "linkquality": 120 },
+      "delay": 5
+    },
 
-    {"_comment": "========== PATTERN B: Door opens → porch light (occurrence 1) =========="},
-    {"topic": "zigbee2mqtt/front_door", "payload": {"contact": false, "battery": 95, "linkquality": 100}, "delay": "{{between_events}}"},
-    {"topic": "zigbee2mqtt/porch_light/set", "payload": {"state": "ON"}, "delay": "{{user_delay}}"},
-    {"topic": "zigbee2mqtt/porch_light", "payload": {"state": "ON", "brightness": 200}, "delay": 0.1},
-    {"topic": "zigbee2mqtt/front_door", "payload": {"contact": true, "battery": 95, "linkquality": 100}, "delay": 5},
+    {
+      "_comment": "========== PATTERN B: Door opens → porch light (occurrence 1) =========="
+    },
+    {
+      "topic": "zigbee2mqtt/front_door",
+      "payload": { "contact": false, "battery": 95, "linkquality": 100 },
+      "delay": "{{between_events}}"
+    },
+    {
+      "topic": "zigbee2mqtt/porch_light/set",
+      "payload": { "state": "ON" },
+      "delay": "{{user_delay}}"
+    },
+    {
+      "topic": "zigbee2mqtt/porch_light",
+      "payload": { "state": "ON", "brightness": 200 },
+      "delay": 0.1
+    },
+    {
+      "topic": "zigbee2mqtt/front_door",
+      "payload": { "contact": true, "battery": 95, "linkquality": 100 },
+      "delay": 5
+    },
 
-    {"_comment": "========== PATTERN C: Power surge → alert (occurrence 1) =========="},
-    {"topic": "zigbee2mqtt/washing_machine_plug", "payload": {"power": 50, "current": 0.22, "voltage": 230, "state": "ON"}, "delay": "{{between_events}}"},
-    {"topic": "zigbee2mqtt/washing_machine_plug", "payload": {"power": 500, "current": 2.17, "voltage": 230, "state": "ON"}, "delay": 2},
-    {"topic": "alerts/power_surge", "payload": {"device": "washing_machine", "power": 500, "message": "High power detected"}, "delay": "{{user_delay}}"},
+    {
+      "_comment": "========== PATTERN C: Power surge → alert (occurrence 1) =========="
+    },
+    {
+      "topic": "zigbee2mqtt/washing_machine_plug",
+      "payload": {
+        "power": 50,
+        "current": 0.22,
+        "voltage": 230,
+        "state": "ON"
+      },
+      "delay": "{{between_events}}"
+    },
+    {
+      "topic": "zigbee2mqtt/washing_machine_plug",
+      "payload": {
+        "power": 500,
+        "current": 2.17,
+        "voltage": 230,
+        "state": "ON"
+      },
+      "delay": 2
+    },
+    {
+      "topic": "alerts/power_surge",
+      "payload": {
+        "device": "washing_machine",
+        "power": 500,
+        "message": "High power detected"
+      },
+      "delay": "{{user_delay}}"
+    },
 
-    {"_comment": "========== PATTERN A: PIR motion → hallway light (occurrence 2) =========="},
-    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": true, "battery": 84, "linkquality": 118}, "delay": "{{between_events}}"},
-    {"topic": "zigbee2mqtt/hallway_light/set", "payload": {"state": "ON"}, "delay": "{{user_delay}}"},
-    {"topic": "zigbee2mqtt/hallway_light", "payload": {"state": "ON", "brightness": 254}, "delay": 0.1},
-    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": false, "battery": 84, "linkquality": 118}, "delay": 5},
+    {
+      "_comment": "========== PATTERN A: PIR motion → hallway light (occurrence 2) =========="
+    },
+    {
+      "topic": "zigbee2mqtt/hallway_pir",
+      "payload": { "occupancy": true, "battery": 84, "linkquality": 118 },
+      "delay": "{{between_events}}"
+    },
+    {
+      "topic": "zigbee2mqtt/hallway_light/set",
+      "payload": { "state": "ON" },
+      "delay": "{{user_delay}}"
+    },
+    {
+      "topic": "zigbee2mqtt/hallway_light",
+      "payload": { "state": "ON", "brightness": 254 },
+      "delay": 0.1
+    },
+    {
+      "topic": "zigbee2mqtt/hallway_pir",
+      "payload": { "occupancy": false, "battery": 84, "linkquality": 118 },
+      "delay": 5
+    },
 
-    {"_comment": "========== PATTERN B: Door opens → porch light (occurrence 2) =========="},
-    {"topic": "zigbee2mqtt/front_door", "payload": {"contact": false, "battery": 94, "linkquality": 102}, "delay": "{{between_events}}"},
-    {"topic": "zigbee2mqtt/porch_light/set", "payload": {"state": "ON"}, "delay": "{{user_delay}}"},
-    {"topic": "zigbee2mqtt/porch_light", "payload": {"state": "ON", "brightness": 200}, "delay": 0.1},
-    {"topic": "zigbee2mqtt/front_door", "payload": {"contact": true, "battery": 94, "linkquality": 102}, "delay": 5},
+    {
+      "_comment": "========== PATTERN B: Door opens → porch light (occurrence 2) =========="
+    },
+    {
+      "topic": "zigbee2mqtt/front_door",
+      "payload": { "contact": false, "battery": 94, "linkquality": 102 },
+      "delay": "{{between_events}}"
+    },
+    {
+      "topic": "zigbee2mqtt/porch_light/set",
+      "payload": { "state": "ON" },
+      "delay": "{{user_delay}}"
+    },
+    {
+      "topic": "zigbee2mqtt/porch_light",
+      "payload": { "state": "ON", "brightness": 200 },
+      "delay": 0.1
+    },
+    {
+      "topic": "zigbee2mqtt/front_door",
+      "payload": { "contact": true, "battery": 94, "linkquality": 102 },
+      "delay": 5
+    },
 
-    {"_comment": "========== PATTERN C: Power surge → alert (occurrence 2) =========="},
-    {"topic": "zigbee2mqtt/washing_machine_plug", "payload": {"power": 45, "current": 0.20, "voltage": 230, "state": "ON"}, "delay": "{{between_events}}"},
-    {"topic": "zigbee2mqtt/washing_machine_plug", "payload": {"power": 520, "current": 2.26, "voltage": 230, "state": "ON"}, "delay": 2},
-    {"topic": "alerts/power_surge", "payload": {"device": "washing_machine", "power": 520, "message": "High power detected"}, "delay": "{{user_delay}}"},
+    {
+      "_comment": "========== PATTERN C: Power surge → alert (occurrence 2) =========="
+    },
+    {
+      "topic": "zigbee2mqtt/washing_machine_plug",
+      "payload": { "power": 45, "current": 0.2, "voltage": 230, "state": "ON" },
+      "delay": "{{between_events}}"
+    },
+    {
+      "topic": "zigbee2mqtt/washing_machine_plug",
+      "payload": {
+        "power": 520,
+        "current": 2.26,
+        "voltage": 230,
+        "state": "ON"
+      },
+      "delay": 2
+    },
+    {
+      "topic": "alerts/power_surge",
+      "payload": {
+        "device": "washing_machine",
+        "power": 520,
+        "message": "High power detected"
+      },
+      "delay": "{{user_delay}}"
+    },
 
-    {"_comment": "========== PATTERN A: PIR motion → hallway light (occurrence 3) =========="},
-    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": true, "battery": 84, "linkquality": 122}, "delay": "{{between_events}}"},
-    {"topic": "zigbee2mqtt/hallway_light/set", "payload": {"state": "ON"}, "delay": "{{user_delay}}"},
-    {"topic": "zigbee2mqtt/hallway_light", "payload": {"state": "ON", "brightness": 254}, "delay": 0.1},
-    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": false, "battery": 84, "linkquality": 122}, "delay": 5},
+    {
+      "_comment": "========== PATTERN A: PIR motion → hallway light (occurrence 3) =========="
+    },
+    {
+      "topic": "zigbee2mqtt/hallway_pir",
+      "payload": { "occupancy": true, "battery": 84, "linkquality": 122 },
+      "delay": "{{between_events}}"
+    },
+    {
+      "topic": "zigbee2mqtt/hallway_light/set",
+      "payload": { "state": "ON" },
+      "delay": "{{user_delay}}"
+    },
+    {
+      "topic": "zigbee2mqtt/hallway_light",
+      "payload": { "state": "ON", "brightness": 254 },
+      "delay": 0.1
+    },
+    {
+      "topic": "zigbee2mqtt/hallway_pir",
+      "payload": { "occupancy": false, "battery": 84, "linkquality": 122 },
+      "delay": 5
+    },
 
-    {"_comment": "========== PATTERN B: Door opens → porch light (occurrence 3) =========="},
-    {"topic": "zigbee2mqtt/front_door", "payload": {"contact": false, "battery": 93, "linkquality": 98}, "delay": "{{between_events}}"},
-    {"topic": "zigbee2mqtt/porch_light/set", "payload": {"state": "ON"}, "delay": "{{user_delay}}"},
-    {"topic": "zigbee2mqtt/porch_light", "payload": {"state": "ON", "brightness": 200}, "delay": 0.1},
-    {"topic": "zigbee2mqtt/front_door", "payload": {"contact": true, "battery": 93, "linkquality": 98}, "delay": 5},
+    {
+      "_comment": "========== PATTERN B: Door opens → porch light (occurrence 3) =========="
+    },
+    {
+      "topic": "zigbee2mqtt/front_door",
+      "payload": { "contact": false, "battery": 93, "linkquality": 98 },
+      "delay": "{{between_events}}"
+    },
+    {
+      "topic": "zigbee2mqtt/porch_light/set",
+      "payload": { "state": "ON" },
+      "delay": "{{user_delay}}"
+    },
+    {
+      "topic": "zigbee2mqtt/porch_light",
+      "payload": { "state": "ON", "brightness": 200 },
+      "delay": 0.1
+    },
+    {
+      "topic": "zigbee2mqtt/front_door",
+      "payload": { "contact": true, "battery": 93, "linkquality": 98 },
+      "delay": 5
+    },
 
-    {"_comment": "========== PATTERN C: Power surge → alert (occurrence 3) =========="},
-    {"topic": "zigbee2mqtt/washing_machine_plug", "payload": {"power": 48, "current": 0.21, "voltage": 230, "state": "ON"}, "delay": "{{between_events}}"},
-    {"topic": "zigbee2mqtt/washing_machine_plug", "payload": {"power": 480, "current": 2.09, "voltage": 230, "state": "ON"}, "delay": 2},
-    {"topic": "alerts/power_surge", "payload": {"device": "washing_machine", "power": 480, "message": "High power detected"}, "delay": "{{user_delay}}"},
+    {
+      "_comment": "========== PATTERN C: Power surge → alert (occurrence 3) =========="
+    },
+    {
+      "topic": "zigbee2mqtt/washing_machine_plug",
+      "payload": {
+        "power": 48,
+        "current": 0.21,
+        "voltage": 230,
+        "state": "ON"
+      },
+      "delay": "{{between_events}}"
+    },
+    {
+      "topic": "zigbee2mqtt/washing_machine_plug",
+      "payload": {
+        "power": 480,
+        "current": 2.09,
+        "voltage": 230,
+        "state": "ON"
+      },
+      "delay": 2
+    },
+    {
+      "topic": "alerts/power_surge",
+      "payload": {
+        "device": "washing_machine",
+        "power": 480,
+        "message": "High power detected"
+      },
+      "delay": "{{user_delay}}"
+    },
 
-    {"_comment": "========== Final test: All patterns should now be automated =========="},
-    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": true, "battery": 83, "linkquality": 120}, "delay": "{{between_events}}"},
-    {"topic": "zigbee2mqtt/front_door", "payload": {"contact": false, "battery": 92, "linkquality": 100}, "delay": 5},
-    {"topic": "zigbee2mqtt/washing_machine_plug", "payload": {"power": 510, "current": 2.22, "voltage": 230, "state": "ON"}, "delay": 5},
+    {
+      "_comment": "========== Final test: All patterns should now be automated =========="
+    },
+    {
+      "topic": "zigbee2mqtt/hallway_pir",
+      "payload": { "occupancy": true, "battery": 83, "linkquality": 120 },
+      "delay": "{{between_events}}"
+    },
+    {
+      "topic": "zigbee2mqtt/front_door",
+      "payload": { "contact": false, "battery": 92, "linkquality": 100 },
+      "delay": 5
+    },
+    {
+      "topic": "zigbee2mqtt/washing_machine_plug",
+      "payload": {
+        "power": 510,
+        "current": 2.22,
+        "voltage": 230,
+        "state": "ON"
+      },
+      "delay": 5
+    },
 
-    {"_comment": "========== Some noise to end the simulation =========="},
-    {"topic": "zigbee2mqtt/temperature_sensor", "payload": {"temperature": 22.1, "humidity": 48, "battery": 88}, "delay": 3},
-    {"topic": "zigbee2mqtt/bridge/state", "payload": {"state": "online"}, "delay": 1}
+    { "_comment": "========== Some noise to end the simulation ==========" },
+    {
+      "topic": "zigbee2mqtt/temperature_sensor",
+      "payload": { "temperature": 22.1, "humidity": 48, "battery": 88 },
+      "delay": 3
+    },
+    {
+      "topic": "zigbee2mqtt/bridge/state",
+      "payload": { "state": "online" },
+      "delay": 1
+    }
   ],
   "speed_multiplier": 10
 }

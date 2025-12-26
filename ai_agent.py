@@ -308,6 +308,13 @@ def _announce_ai_action(topic: str, payload: str) -> None:
 
 def execute_tool_call(tool_name: str, arguments: dict) -> str:
     """Execute an MCP tool and return the result."""
+    # Publish AI_TOOL_CALLED event for validation tracking
+    from event_bus import event_bus, EventType
+    event_bus.publish(EventType.AI_TOOL_CALLED, {
+        "tool": tool_name,
+        "arguments": arguments
+    })
+    
     mcp = _get_mcp_tools()
     
     # For send_mqtt_message, publish announcement first

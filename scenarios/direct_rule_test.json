@@ -1,0 +1,76 @@
+{
+  "name": "Direct Rule Execution Test",
+  "description": "Tests the new direct rule execution flow. Requires a pre-configured rule in learned_rules.json. The rule engine should execute the rule directly without invoking AI, and publish a causation announcement to mqtt2ai/action/announce.",
+  "setup_instructions": [
+    "Before running this simulation, ensure learned_rules.json contains a rule like:",
+    "{",
+    "  \"rules\": [{",
+    "    \"id\": \"hallway_pir_to_light\",",
+    "    \"trigger\": {\"topic\": \"zigbee2mqtt/hallway_pir\", \"field\": \"occupancy\", \"value\": true},",
+    "    \"action\": {\"topic\": \"zigbee2mqtt/hallway_light/set\", \"payload\": \"{\\\"state\\\": \\\"ON\\\"}\"},",
+    "    \"timing\": {\"avg_delay_seconds\": 2.0, \"tolerance_seconds\": 1.0},",
+    "    \"confidence\": {\"occurrences\": 5, \"last_triggered\": \"2024-01-01T12:00:00\"},",
+    "    \"enabled\": true",
+    "  }]",
+    "}"
+  ],
+  "expected_behavior": [
+    "1. PIR trigger should match the existing rule",
+    "2. RuleEngine executes directly (no AI call)",
+    "3. Announcement published to mqtt2ai/action/announce with source='direct_rule'",
+    "4. Action published to zigbee2mqtt/hallway_light/set",
+    "5. Second PIR trigger (different topic) should NOT match - AI is invoked for pattern learning"
+  ],
+  "variables": {
+    "cooldown_between_events": 5
+  },
+  "messages": [
+    {"_comment": "=== Test 1: Trigger that MATCHES an existing rule (direct execution) ==="},
+    {"_comment": "This should trigger the rule engine to execute directly, no AI needed"},
+    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": true, "battery": 85, "linkquality": 120}, "delay": 0},
+    
+    {"_comment": "=== Verify: The action should appear in the stream (from direct execution) ==="},
+    {"_comment": "In real mode, the daemon will publish to hallway_light/set"},
+    {"_comment": "For simulation, we simulate the device feedback"},
+    {"topic": "zigbee2mqtt/hallway_light", "payload": {"state": "ON", "brightness": 254}, "delay": 0.5},
+    
+    {"_comment": "=== Reset: PIR goes back to no occupancy ==="},
+    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": false, "battery": 85, "linkquality": 120}, "delay": 3},
+
+    {"_comment": "=== Test 2: Trigger that does NOT match any rule (AI needed) ==="},
+    {"_comment": "This PIR is not in learned_rules, so AI should be invoked for pattern learning"},
+    {"topic": "zigbee2mqtt/kitchen_pir", "payload": {"occupancy": true, "battery": 90, "linkquality": 115}, "delay": "{{cooldown_between_events}}"},
+    
+    {"_comment": "=== Simulated user action (for pattern learning) ==="},
+    {"topic": "zigbee2mqtt/kitchen_light/set", "payload": {"state": "ON"}, "delay": 2},
+    {"topic": "zigbee2mqtt/kitchen_light", "payload": {"state": "ON", "brightness": 254}, "delay": 0.1},
+    
+    {"_comment": "=== Reset ==="},
+    {"topic": "zigbee2mqtt/kitchen_pir", "payload": {"occupancy": false, "battery": 90, "linkquality": 115}, "delay": 5},
+
+    {"_comment": "=== Test 3: Trigger the known rule again to verify it still works ==="},
+    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": true, "battery": 84, "linkquality": 118}, "delay": "{{cooldown_between_events}}"},
+    {"topic": "zigbee2mqtt/hallway_light", "payload": {"state": "ON", "brightness": 254}, "delay": 0.5},
+
+    {"_comment": "=== Test 4: Disabled rule test ==="},
+    {"_comment": "If you set enabled=false on the hallway rule, this should invoke AI instead"},
+    
+    {"_comment": "=== Some noise to fill buffer ==="},
+    {"topic": "zigbee2mqtt/temperature_sensor", "payload": {"temperature": 21.5, "humidity": 45, "battery": 90}, "delay": 2},
+    {"topic": "zigbee2mqtt/power_plug", "payload": {"power": 150, "current": 0.65, "voltage": 230}, "delay": 1}
+  ],
+  "speed_multiplier": 2,
+  "verification": {
+    "console_should_show": [
+      "[DIRECT RULE] hallway_pir_to_light",
+      "mqtt2ai/action/announce"
+    ],
+    "ai_should_not_be_called_for": [
+      "zigbee2mqtt/hallway_pir when rule is enabled"
+    ],
+    "ai_should_be_called_for": [
+      "zigbee2mqtt/kitchen_pir (no matching rule)"
+    ]
+  }
+}
+

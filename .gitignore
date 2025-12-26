@@ -150,3 +150,5 @@ Thumbs.db
 # Project specific
 *.log
 
+# --debug mode ouput
+debug-output/

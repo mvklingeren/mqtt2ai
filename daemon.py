@@ -24,6 +24,7 @@ from mqtt_client import MqttClient
 from mqtt_simulator import MqttSimulator
 from ai_agent import AiAgent
 from trigger_analyzer import TriggerAnalyzer, TriggerResult
+from event_bus import event_bus, EventType
 
 VERSION = "0.2"
 
@@ -95,6 +96,13 @@ class RuleEngine:
 
             if self._matches(rule, topic, payload, trigger_result):
                 self._announce_and_execute(rule, topic, trigger_result)
+                # Publish RULE_EXECUTED event for validation
+                event_bus.publish(EventType.RULE_EXECUTED, {
+                    "rule_id": rule.get("id"),
+                    "trigger_topic": topic,
+                    "trigger_field": trigger_result.field_name,
+                    "action_topic": rule.get("action", {}).get("topic")
+                })
                 return True
 
         return False
@@ -307,10 +315,15 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         if self.config.no_ai:
             logging.info("Daemon started in NO-AI MODE (logging only, no AI calls)")
         else:
+            triggers = []
+            if not self.config.disable_interval_trigger:
+                triggers.append(f"every {self.config.ai_check_interval}s")
+            if not self.config.disable_threshold_trigger:
+                triggers.append(f"{self.config.ai_check_threshold} msgs")
+            triggers.append("smart trigger")
             logging.info(
-                "Daemon started. AI checks every %ds, %d msgs, or on smart trigger.",
-                self.config.ai_check_interval,
-                self.config.ai_check_threshold
+                "Daemon started. AI checks: %s",
+                ", ".join(triggers)
             )
 
         self._main_loop()
@@ -325,11 +338,13 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
 
                 with self.lock:
                     should_check_count = (
-                        self.new_message_count >= self.config.ai_check_threshold
+                        not self.config.disable_threshold_trigger
+                        and self.new_message_count >= self.config.ai_check_threshold
                     )
 
                 should_check_time = (
-                    (time.time() - last_check_time) >= self.config.ai_check_interval
+                    not self.config.disable_interval_trigger
+                    and (time.time() - last_check_time) >= self.config.ai_check_interval
                 )
 
                 if instant_trigger or should_check_count or should_check_time:
@@ -663,6 +678,14 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 if trigger_result.should_trigger:
                     self._print_trigger(trigger_result, line)
                     
+                    # Publish TRIGGER_FIRED event for validation
+                    event_bus.publish(EventType.TRIGGER_FIRED, {
+                        "topic": current_topic,
+                        "field": trigger_result.field_name,
+                        "old_value": trigger_result.old_value,
+                        "new_value": trigger_result.new_value
+                    })
+                    
                     # Try direct rule execution first (fast path, no AI)
                     # Reload knowledge base to get latest rules
                     self.kb.load_all()
@@ -672,6 +695,12 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                     
                     if not rule_handled:
                         # No rule matched - queue for AI (pattern learning or anomaly)
+                        # Publish RULE_NOT_MATCHED event for validation
+                        event_bus.publish(EventType.RULE_NOT_MATCHED, {
+                            "trigger_topic": current_topic,
+                            "trigger_field": trigger_result.field_name
+                        })
+                        
                         with self.lock:
                             self.last_trigger_result = trigger_result
                         self.ai_event.set()
@@ -707,6 +736,11 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             # Wait for AI queue to be empty
             if not self.config.no_ai:
                 self.ai_queue.join()
+            
+            # Publish SIMULATION_COMPLETE event for validation
+            event_bus.publish(EventType.SIMULATION_COMPLETE, {
+                "total_messages": len(self.messages_deque)
+            })
             
             logging.info("All AI processing complete. Shutting down...")
             self.running = False
