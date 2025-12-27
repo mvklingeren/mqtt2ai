@@ -731,10 +731,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
 
     def _collector_loop(self):  # pylint: disable=too-many-branches,too-many-statements
         """Background thread that collects MQTT messages via paho-mqtt subscription."""
-        logging.info(
-            "Starting MQTT collector (quiet for %ds)...",
-            self.config.skip_printing_seconds
-        )
+        logging.info("Starting MQTT collector...")
 
         try:
             # Subscribe to topics using paho-mqtt
@@ -745,9 +742,6 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 logging.critical("Failed to subscribe to MQTT topics")
                 os.kill(os.getpid(), signal.SIGTERM)
                 return
-
-            start_time = time.time()
-            quiet_period_over = False
 
             while self.running:
                 # Get message from queue with timeout to allow checking self.running
@@ -773,16 +767,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 line = f"{current_topic} {current_payload}"
 
                 # 3. Display Logic
-                elapsed = time.time() - start_time
-                should_print = False
-
-                if elapsed > self.config.skip_printing_seconds:
-                    if not quiet_period_over:
-                        logging.info("--- Initial quiet period over. Monitoring... ---")
-                        quiet_period_over = True
-
-                    if current_topic not in self.config.ignore_printing_topics:
-                        should_print = True
+                should_print = current_topic not in self.config.ignore_printing_topics
 
                 # 4. Analysis
                 trigger_result = self.trigger_analyzer.analyze(
@@ -841,9 +826,6 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 self.config.simulation_speed
             )
 
-            start_time = time.time()
-            quiet_period_over = False
-
             for topic, payload in simulator.run_simulation():
                 if not self.running:
                     break
@@ -865,16 +847,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                     continue
 
                 # Display Logic
-                elapsed = time.time() - start_time
-                should_print = False
-
-                if elapsed > self.config.skip_printing_seconds:
-                    if not quiet_period_over:
-                        logging.info("--- Initial quiet period over. Monitoring... ---")
-                        quiet_period_over = True
-
-                    if current_topic not in self.config.ignore_printing_topics:
-                        should_print = True
+                should_print = current_topic not in self.config.ignore_printing_topics
 
                 # Analysis
                 trigger_result = self.trigger_analyzer.analyze(

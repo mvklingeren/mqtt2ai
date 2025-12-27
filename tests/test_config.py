@@ -141,11 +141,6 @@ class TestConfigIgnoreLists:
         config = Config()
         assert "stat/" in config.ignore_printing_prefixes
 
-    def test_skip_printing_seconds_default(self):
-        """Test default skip printing seconds."""
-        config = Config()
-        assert config.skip_printing_seconds == 3
-
 
 class TestConfigFromArgs:
     """Test Config.from_args() method."""

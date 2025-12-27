@@ -102,7 +102,6 @@ class Config:  # pylint: disable=too-many-instance-attributes
             "DISABLE_NEW_RULES", ""
         ).lower() in ("1", "true", "yes")
     )
-    skip_printing_seconds: int = 3
     ignore_printing_topics: List[str] = field(
         default_factory=lambda: [
             "zigbee2mqtt/bridge/logging",
