@@ -1,21 +1,20 @@
-# MQTT2AI Home Automation Daemon
+# MQTT2AI - Smart Home Automation with AI
 
-A self-learning smart home automation system that uses AI to analyze MQTT messages, detect user behavior patterns, and automatically create automation rules.
+MQTT2AI is an intelligent home automation daemon that learns patterns from user behavior and creates automation rules using AI. It monitors MQTT messages from smart home devices and uses AI (via OpenAI-compatible APIs, Gemini, or Claude) to detect patterns and automate actions.
 
 ## Features
 
-- 🤖 **AI-Powered Analysis** - Supports multiple AI providers (Gemini, Claude, Codex/OpenAI)
-- 📚 **Pattern Learning** - Watches user behavior and learns automation rules
-- ⚡ **Smart Triggers** - Filters noise and only triggers AI on significant events
-- 🔧 **MCP Tool Calling** - AI can directly publish MQTT messages and manage rules
-- 🏠 **Zigbee2MQTT Integration** - Works with Zigbee devices via MQTT
-- 🚫 **Undo Detection** - Automatically detects and rejects unwanted automations
+- **AI-Powered Analysis** - Supports multiple AI providers (Gemini, Claude, OpenAI-compatible)
+- **Pattern Learning** - Watches user behavior and learns automation rules
+- **Smart Triggers** - Filters noise and only triggers AI on significant events
+- **Tool Calling** - AI can directly publish MQTT messages and manage rules
+- **Zigbee2MQTT Integration** - Works with Zigbee devices via MQTT
+- **Undo Detection** - Automatically detects and rejects unwanted automations
+- **Fast Path Execution** - Learned rules execute instantly without AI involvement
 
 ---
 
-## ⚠️ Security Warning
-
-> **This system runs AI agents in UNSAFE/AUTO-APPROVE mode with no human confirmation required.**
+## Security Warning
 
 ### Security Concerns
 
@@ -27,128 +26,187 @@ A self-learning smart home automation system that uses AI to analyze MQTT messag
 
 ```mermaid
 flowchart TB
-    subgraph MQTT["MQTT Broker (192.168.1.245:1883)"]
-        Topics["Topics: zigbee2mqtt/#, home/#, etc."]
+    subgraph External["External Systems"]
+        MQTT[("MQTT Broker")]
+        Z2M["Zigbee2MQTT"]
+        Devices["Smart Devices"]
     end
 
-    subgraph Daemon["mqtt_ai_daemon.py"]
-        Collector["Collector Thread<br/>(mosquitto_sub)"]
-        MessageDeque["Message Buffer<br/>(max 1000 msgs)"]
-        TriggerAnalyzer["TriggerAnalyzer<br/>(Smart Filtering)"]
-        AILoop["Main Loop<br/>(AI Check Scheduler)"]
-    end
-
-    subgraph Triggers["AI Trigger Conditions"]
-        T1["⏰ Time: Every 300s"]
-        T2["📊 Count: 50+ messages"]
-        T3["🎯 Smart: State change"]
-    end
-
-    subgraph AI["AI CLI (Gemini/Claude/Codex)"]
-        Prompt["Prompt with:<br/>- Rulebook<br/>- Learned Rules<br/>- Pending Patterns<br/>- MQTT Messages"]
-        MCPClient["MCP Client<br/>(auto-approve mode)"]
-    end
-
-    subgraph MCPServer["mcp_mqtt_server.py"]
+    subgraph Daemon["MQTT AI Daemon"]
         direction TB
-        Tool1["send_mqtt_message()"]
-        Tool2["record_pattern_observation()"]
-        Tool3["create_rule()"]
-        Tool4["get_learned_rules()"]
-        Tool5["delete_rule() / toggle_rule()"]
+
+        subgraph Collector["Collector Thread"]
+            MQTTClient["MQTT Client"]
+            MsgQueue["Message Queue"]
+        end
+
+        subgraph Processing["Message Processing"]
+            DeviceTracker["Device State Tracker"]
+            TriggerAnalyzer["Trigger Analyzer"]
+            RuleEngine["Rule Engine"]
+        end
+
+        subgraph AILayer["AI Layer"]
+            AIQueue["AI Queue"]
+            AIWorker["AI Worker Thread"]
+            AIAgent["AI Agent"]
+            PromptBuilder["Prompt Builder"]
+            AlertHandler["Alert Handler"]
+        end
+
+        subgraph Knowledge["Knowledge Base"]
+            LearnedRules[("learned_rules.json")]
+            PendingPatterns[("pending_patterns.json")]
+            Rulebook[("rulebook.md")]
+        end
+
+        EventBus["Event Bus"]
     end
 
-    subgraph Storage["JSON Files"]
-        RulebookMD["rulebook.md<br/>(Decision Rules)"]
-        LearnedRules["learned_rules.json<br/>(Finalized Rules)"]
-        PendingPatterns["pending_patterns.json<br/>(Pattern Observations)"]
-        RejectedPatterns["rejected_patterns.json<br/>(Rejected Patterns)"]
-        FilteredTriggers["filtered_triggers.json<br/>(Smart Trigger Config)"]
+    subgraph AIProviders["AI Providers"]
+        OpenAI["OpenAI-Compatible"]
+        Gemini["Google Gemini"]
+        Claude["Anthropic Claude"]
     end
 
-    subgraph Devices["Smart Home Devices"]
-        Sensors["Sensors:<br/>PIR, Door, Smoke, Water"]
-        Actuators["Actuators:<br/>Lights, Sirens, Plugs"]
+    subgraph OpenAIAPI["OpenAI-Compatible API Flow"]
+        direction LR
+        APIEndpoint["API Endpoint"]
+        ToolCalls["Tool Calls"]
     end
 
-    %% Data Flow
-    Sensors -->|"publish events"| MQTT
-    MQTT -->|"subscribe #"| Collector
-    Collector --> MessageDeque
-    Collector --> TriggerAnalyzer
-    TriggerAnalyzer -->|"triggers"| AILoop
-    
-    T1 --> AILoop
-    T2 --> AILoop
-    T3 --> AILoop
+    Devices <--> Z2M
+    Z2M <--> MQTT
 
-    AILoop -->|"invoke"| Prompt
-    RulebookMD -->|"context"| Prompt
-    LearnedRules -->|"context"| Prompt
-    PendingPatterns -->|"context"| Prompt
-    
-    Prompt --> MCPClient
-    MCPClient -->|"tool calls"| MCPServer
-    
-    Tool1 -->|"mosquitto_pub"| MQTT
-    Tool2 --> PendingPatterns
-    Tool3 --> LearnedRules
-    Tool4 --> LearnedRules
-    Tool5 --> LearnedRules
+    MQTT --> MQTTClient
+    MQTTClient --> MsgQueue
+    MsgQueue --> DeviceTracker
+    DeviceTracker --> TriggerAnalyzer
+    TriggerAnalyzer --> RuleEngine
 
-    MQTT -->|"commands"| Actuators
-    FilteredTriggers --> TriggerAnalyzer
+    RuleEngine -->|"Rule Matched"| MQTT
+    RuleEngine -->|"No Rule"| AIQueue
+
+    AIQueue --> AIWorker
+    AIWorker --> AIAgent
+    AIAgent --> PromptBuilder
+    PromptBuilder --> Knowledge
+    AIAgent --> AlertHandler
+
+    AIAgent --> OpenAI
+    AIAgent --> Gemini
+    AIAgent --> Claude
+
+    OpenAI --> APIEndpoint
+    APIEndpoint --> ToolCalls
+    ToolCalls -->|"send_mqtt_message"| MQTT
+    ToolCalls -->|"create_rule"| LearnedRules
+    ToolCalls -->|"record_pattern"| PendingPatterns
+    ToolCalls -->|"raise_alert"| AlertHandler
+
+    RuleEngine -.-> EventBus
+    AIAgent -.-> EventBus
+    TriggerAnalyzer -.-> EventBus
+```
+
+---
+
+## Message Flow
+
+```mermaid
+sequenceDiagram
+    participant D as Smart Device
+    participant M as MQTT Broker
+    participant C as Collector Thread
+    participant T as Trigger Analyzer
+    participant R as Rule Engine
+    participant A as AI Agent
+    participant API as OpenAI API
+    participant K as Knowledge Base
+
+    D->>M: Publish state change
+    M->>C: Deliver message
+    C->>C: Update Device State Tracker
+    C->>T: Analyze for triggers
+
+    alt Smart Trigger Detected
+        T->>R: Check learned rules
+
+        alt Rule Exists - Fast Path
+            R->>M: Execute action directly
+            R->>R: Publish RULE_EXECUTED event
+        else No Matching Rule
+            R->>A: Queue for AI analysis
+            A->>A: Build optimized prompt
+            A->>API: Send chat completion request
+
+            loop Tool Calling - max 10 iterations
+                API->>A: Return tool_calls
+                A->>A: Execute tool
+
+                alt record_pattern_observation
+                    A->>K: Store pattern - 1/3 observations
+                else create_rule - after 3+ observations
+                    A->>K: Save new rule
+                else send_mqtt_message
+                    A->>M: Publish MQTT action
+                end
+
+                A->>API: Return tool result
+            end
+
+            API->>A: Final response
+        end
+    end
+```
+
+---
+
+## Tool System
+
+```mermaid
+flowchart LR
+    subgraph Tools["Available AI Tools"]
+        send["send_mqtt_message"]
+        record["record_pattern_observation"]
+        create["create_rule"]
+        reject["reject_pattern"]
+        undo["report_undo"]
+        toggle["toggle_rule"]
+        getRules["get_learned_rules"]
+        getPatterns["get_pending_patterns"]
+        alert["raise_alert"]
+    end
+
+    AI["AI Agent"] --> Tools
+
+    send --> MQTT["MQTT Broker"]
+    record --> Pending["pending_patterns.json"]
+    create --> Rules["learned_rules.json"]
+    reject --> Rejected["rejected_patterns.json"]
+    toggle --> Rules
+    alert --> AlertHandler["Alert Handler"]
 ```
 
 ---
 
 ## How It Works
 
-### 1. Message Collection
+1. **Message Collection**: The daemon subscribes to MQTT topics and collects messages from smart home devices.
 
-The daemon runs a **collector thread** that subscribes to all MQTT topics (`#`). Messages are:
-- Stored in a circular buffer (max 1000 messages)
-- Filtered through `TriggerAnalyzer` to detect significant state changes
-- Timestamped for pattern delay calculation
+2. **Trigger Detection**: The Trigger Analyzer detects meaningful state changes (e.g., motion detected, contact opened) while filtering noise.
 
-### 2. AI Trigger Conditions
+3. **Fast Path Execution**: If a learned rule matches the trigger, the Rule Engine executes it immediately without AI involvement (~100ms response).
 
-The AI analysis runs when ANY of these conditions are met:
+4. **AI Analysis**: For unrecognized patterns, messages are queued for AI analysis. The AI can:
+   - Record pattern observations (needs 3+ observations before creating a rule)
+   - Create automation rules from confirmed patterns
+   - Execute immediate MQTT commands
+   - Raise security alerts
 
-| Trigger | Threshold | Description |
-|---------|-----------|-------------|
-| ⏰ Time | 300 seconds | Periodic analysis every 5 minutes |
-| 📊 Count | 50 messages | After accumulating 50 new messages |
-| 🎯 Smart | State change | When TriggerAnalyzer detects significant change |
+5. **Pattern Learning**: The system learns from repeated user behaviors. After observing the same trigger→action pattern 3+ times, it creates an automation rule.
 
-### 3. AI Orchestration
-
-When triggered, the daemon builds a prompt containing:
-- The **rulebook** (decision rules from `rulebook.md`)
-- **Learned rules** (confirmed automations from `learned_rules.json`)
-- **Pending patterns** (observations not yet rules from `pending_patterns.json`)
-- **Recent MQTT messages** (with timestamps)
-
-The AI is invoked via the configured CLI (Gemini, Claude, or Codex) with MCP tool calling enabled and auto-approval mode.
-
-### 4. MCP Tools
-
-The AI can call these tools via the MCP server:
-
-| Tool | Purpose |
-|------|---------|
-| `send_mqtt_message(topic, payload)` | Publish to MQTT topics |
-| `record_pattern_observation(...)` | Track trigger→action sequences |
-| `create_rule(...)` | Formalize a pattern into a rule (after 3 observations) |
-| `get_learned_rules()` | Retrieve active automation rules |
-| `get_pending_patterns()` | Check observation counts |
-| `delete_rule(rule_id)` | Remove a learned rule |
-| `toggle_rule(rule_id, enabled)` | Enable/disable a rule |
-| `clear_pending_patterns()` | Reset pattern learning |
-| `report_undo(rule_id)` | Report user undid an automated action |
-| `reject_pattern(...)` | Permanently reject a pattern |
-| `get_rejected_patterns()` | List rejected patterns |
-| `remove_rejected_pattern(...)` | Allow a rejected pattern to be learned again |
+6. **Alert System**: Security-related events can trigger alerts with severity-based responses (logging, notifications, or AI-driven defensive actions).
 
 ---
 
@@ -161,11 +219,10 @@ sequenceDiagram
     participant MQTT
     participant Daemon
     participant AI as AI Agent
-    participant MCP as MCP Server
     participant Rules as learned_rules.json
     participant Patterns as pending_patterns.json
 
-    Note over User,Patterns: Pattern Detection (3x required)
+    Note over User,Patterns: Pattern Detection - 3x required
     
     User->>Sensor: Walks into room
     Sensor->>MQTT: occupancy: true
@@ -175,23 +232,19 @@ sequenceDiagram
     MQTT->>Daemon: light/set: ON
     
     Daemon->>AI: Analyze messages
-    AI->>AI: Detect pattern:<br/>PIR → Light (5s delay)
-    AI->>MCP: record_pattern_observation()
-    MCP->>Patterns: Save observation (1/3)
+    AI->>AI: Detect pattern: PIR to Light - 5s delay
+    AI->>Patterns: record_pattern_observation - Save 1/3
     
     Note over User,Patterns: After 3 observations...
     
-    AI->>MCP: create_rule()
-    MCP->>Rules: Save as automation rule
-    MCP->>Patterns: Clear pending pattern
+    AI->>Rules: create_rule - Save as automation
+    AI->>Patterns: Clear pending pattern
     
-    Note over User,Patterns: Rule Execution (future triggers)
+    Note over User,Patterns: Rule Execution - future triggers
     
     Sensor->>MQTT: occupancy: true
     MQTT->>Daemon: Smart trigger!
-    Daemon->>AI: Analyze + execute rules
-    AI->>MCP: send_mqtt_message(light/set, ON)
-    MCP->>MQTT: Automatic light on!
+    Daemon->>MQTT: Automatic light on via Fast Path
 ```
 
 ---
@@ -207,24 +260,21 @@ When the AI executes a learned rule, the action appears in the MQTT message buff
 ```mermaid
 sequenceDiagram
     participant AI as AI Agent
-    participant MCP as MCP Server
     participant MQTT
     participant User
 
     Note over AI,User: AI executes automation
-    AI->>MCP: send_mqtt_message(light/set, ON)
-    MCP->>MQTT: Light turns ON
+    AI->>MQTT: send_mqtt_message - light ON
     
     Note over AI,User: User undoes within 30s
     User->>MQTT: light/set: OFF
     
     Note over AI,User: Next AI analysis
     AI->>AI: Detect undo in messages
-    AI->>MCP: report_undo(rule_id)
-    MCP->>MCP: undo_count++ 
+    AI->>AI: report_undo - undo_count++
     
     Note over AI,User: After 3 undos
-    AI->>MCP: reject_pattern(...)
+    AI->>AI: reject_pattern
 ```
 
 ### Rejected Patterns
@@ -254,6 +304,170 @@ Rejected patterns will:
   ]
 }
 ```
+
+---
+
+## Command-Line Options
+
+### MQTT Settings
+
+| Parameter     | Default         | Description                         |
+| ------------- | --------------- | ----------------------------------- |
+| `--mqtt-host` | `192.168.1.245` | MQTT Broker Host (env: `MQTT_HOST`) |
+| `--mqtt-port` | `1883`          | MQTT Broker Port (env: `MQTT_PORT`) |
+
+### AI Provider Selection
+
+| Parameter       | Default             | Description                                             |
+| --------------- | ------------------- | ------------------------------------------------------- |
+| `--ai-provider` | `openai-compatible` | AI provider: `gemini`, `claude`, or `openai-compatible` |
+
+### Gemini (Google AI)
+
+| Parameter          | Default            | Description                           |
+| ------------------ | ------------------ | ------------------------------------- |
+| `--gemini-model`   | `gemini-2.0-flash` | Gemini Model ID (env: `GEMINI_MODEL`) |
+| `--gemini-api-key` | -                  | API key (env: `GEMINI_API_KEY`)       |
+
+### Claude (Anthropic)
+
+| Parameter          | Default                   | Description                           |
+| ------------------ | ------------------------- | ------------------------------------- |
+| `--claude-model`   | `claude-3-5-haiku-latest` | Claude Model ID (env: `CLAUDE_MODEL`) |
+| `--claude-api-key` | -                         | API key (env: `ANTHROPIC_API_KEY`)    |
+
+### OpenAI-Compatible API (Groq, Ollama, LM Studio, vLLM)
+
+| Parameter           | Default                          | Description                                                 |
+| ------------------- | -------------------------------- | ----------------------------------------------------------- |
+| `--openai-api-base` | `https://api.groq.com/openai/v1` | Base URL for API (env: `OPENAI_API_BASE`)                   |
+| `--openai-api-key`  | -                                | API key (env: `GROQ_API_KEY` or `OPENAI_API_KEY`)           |
+| `--openai-models`   | `llama-3.3-70b-versatile`        | Comma-separated list for round-robin (env: `OPENAI_MODELS`) |
+
+### Mode Flags
+
+| Parameter                     | Short | Description                                                  |
+| ----------------------------- | ----- | ------------------------------------------------------------ |
+| `--verbose`                   | `-v`  | Enable verbose logging                                       |
+| `--compress`                  | `-c`  | Compress MQTT payloads in console output                     |
+| `--demo`                      | -     | Enable demo mode (limited tools)                             |
+| `--no-ai`                     | -     | Disable AI calls (logging only)                              |
+| `--test-ai`                   | -     | Test AI connection and exit                                  |
+| `--disable-new-rules`         | -     | New rules are disabled by default (env: `DISABLE_NEW_RULES`) |
+| `--disable-interval-trigger`  | -     | Disable time-based AI triggers                               |
+| `--disable-threshold-trigger` | -     | Disable message count-based AI triggers                      |
+| `--debug`                     | -     | Write HTTP call details to `debug-output/` directory         |
+
+### Simulation & Testing
+
+| Parameter                       | Description                                                      |
+| ------------------------------- | ---------------------------------------------------------------- |
+| `--simulation FILE`             | Run in simulation mode using a scenario JSON file                |
+| `--simulation-speed MULTIPLIER` | Override speed multiplier (e.g., `10` = 10x faster)              |
+| `--test`                        | Validate assertions from scenario and exit with pass/fail status |
+| `--report FILE`                 | Write JSON test report to file (requires `--test`)               |
+
+---
+
+## Usage Examples
+
+### Basic Usage
+
+```bash
+# Start with default settings (Groq API)
+python mqtt_ai_daemon.py
+
+# Use with verbose logging
+python mqtt_ai_daemon.py -v
+
+# Use Claude as AI provider
+python mqtt_ai_daemon.py --ai-provider claude --claude-api-key YOUR_KEY
+```
+
+### Testing AI Connection
+
+```bash
+# Test that AI connection works before starting
+python mqtt_ai_daemon.py --test-ai
+```
+
+### Using Different AI Providers
+
+```bash
+# Groq (default, blazing fast)
+export GROQ_API_KEY="your-groq-key"
+python mqtt_ai_daemon.py --ai-provider openai-compatible
+
+# Google Gemini
+export GEMINI_API_KEY="your-gemini-key"
+python mqtt_ai_daemon.py --ai-provider gemini
+
+# Anthropic Claude
+export ANTHROPIC_API_KEY="your-anthropic-key"
+python mqtt_ai_daemon.py --ai-provider claude
+
+# Local Ollama
+python mqtt_ai_daemon.py \
+    --ai-provider openai-compatible \
+    --openai-api-base http://localhost:11434/v1 \
+    --openai-models llama3.2
+```
+
+### Simulation Mode
+
+```bash
+# Run a simulation scenario
+python mqtt_ai_daemon.py --simulation scenarios/motion_light.json
+
+# Run with speed multiplier
+python mqtt_ai_daemon.py --simulation scenarios/test.json --simulation-speed 10
+
+# Run tests with assertions
+python mqtt_ai_daemon.py \
+    --simulation scenarios/test.json \
+    --test \
+    --report test-results.json
+```
+
+### Production Configuration
+
+```bash
+# Typical production setup
+python mqtt_ai_daemon.py \
+    --mqtt-host 192.168.1.100 \
+    --ai-provider openai-compatible \
+    --compress \
+    --disable-new-rules
+```
+
+---
+
+## Environment Variables
+
+| Variable            | Description                                   |
+| ------------------- | --------------------------------------------- |
+| `MQTT_HOST`         | MQTT broker hostname                          |
+| `MQTT_PORT`         | MQTT broker port                              |
+| `AI_PROVIDER`       | AI provider to use                            |
+| `GROQ_API_KEY`      | API key for Groq                              |
+| `OPENAI_API_KEY`    | API key for OpenAI-compatible APIs            |
+| `OPENAI_API_BASE`   | Base URL for OpenAI-compatible API            |
+| `OPENAI_MODELS`     | Comma-separated model list                    |
+| `GEMINI_API_KEY`    | API key for Google Gemini                     |
+| `ANTHROPIC_API_KEY` | API key for Anthropic Claude                  |
+| `DISABLE_NEW_RULES` | Set to `true` to disable new rules by default |
+
+---
+
+## Key Files
+
+| File                     | Description                                           |
+| ------------------------ | ----------------------------------------------------- |
+| `learned_rules.json`     | Active automation rules (trigger → action mappings)   |
+| `pending_patterns.json`  | Pattern observations awaiting rule creation           |
+| `rejected_patterns.json` | Patterns marked as coincidental (won't become rules)  |
+| `rulebook.md`            | Decision rules and guidelines passed to AI as context |
+| `filtered_triggers.json` | Configuration for trigger filtering                   |
 
 ---
 
@@ -290,196 +504,6 @@ The AI ignores minor fluctuations:
 
 ---
 
-## File Structure
-
-```
-mqtt-fun/
-├── mqtt_ai_daemon.py       # Main daemon (collector + AI orchestration)
-├── mcp_mqtt_server.py      # MCP server exposing MQTT tools to AI
-├── trigger_analyzer.py     # Smart filtering for significant events
-├── rulebook.md             # Decision rules for the AI
-├── learned_rules.json      # Confirmed automation rules
-├── pending_patterns.json   # Pattern observations (not yet rules)
-├── rejected_patterns.json  # Patterns that should never be learned
-├── filtered_triggers.json  # Smart trigger configuration
-├── instant_triggers.json   # Instant trigger rules
-├── mqtt_listener.py        # Simple MQTT listener utility
-├── mqtt_spawn_test_client.py # Test client for simulating devices
-└── send_alerts.py          # Alert sending utility
-```
-
----
-
-## Configuration
-
-Configuration is managed via command-line arguments or environment variables.
-
-### General Options
-
-| Argument | Env Variable | Default | Description |
-|----------|--------------|---------|-------------|
-| `--mqtt-host` | `MQTT_HOST` | `192.168.1.245` | MQTT broker address |
-| `--mqtt-port` | `MQTT_PORT` | `1883` | MQTT broker port |
-| `--ai-provider` | `AI_PROVIDER` | `gemini` | AI provider: `gemini`, `claude`, or `codex-openai` |
-| `--verbose`, `-v` | - | `False` | Enable verbose logging |
-| `--demo` | - | `False` | Enable demo mode |
-| `--no-ai` | - | `False` | Disable AI calls (logging only mode) |
-
-### Gemini Options
-
-| Argument           | Env Variable         | Default                    | Description         |
-| ------------------ | -------------------- | -------------------------- | ------------------- |
-| `--gemini-command` | `GEMINI_CLI_COMMAND` | `/opt/homebrew/bin/gemini` | Path to Gemini CLI  |
-| `--gemini-model`   | -                    | `gemini-2.5-flash`         | Gemini model to use |
-
-### Claude Options
-
-| Argument              | Env Variable         | Default                   | Description                  |
-| --------------------- | -------------------- | ------------------------- | ---------------------------- |
-| `--claude-command`    | `CLAUDE_CLI_COMMAND` | `~/.nvm/.../bin/claude`   | Path to Claude CLI           |
-| `--claude-model`      | -                    | `claude-3-5-haiku-latest` | Claude model to use          |
-| `--claude-mcp-config` | `CLAUDE_MCP_CONFIG`  | -                         | Path to MCP config JSON file |
-
-### Codex/OpenAI Options
-
-| Argument          | Env Variable        | Default   | Description               |
-| ----------------- | ------------------- | --------- | ------------------------- |
-| `--codex-command` | `CODEX_CLI_COMMAND` | `codex`   | Path to Codex CLI         |
-| `--codex-model`   | -                   | `o4-mini` | Codex/OpenAI model to use |
-
-**Note:** Codex requires an OpenAI API key. Set it via environment variable:
-
-```bash
-export OPENAI_API_KEY="your-api-key-here"
-```
-
-Or authenticate interactively by running `codex` once (supports ChatGPT Plus/Pro/Business accounts).
-
----
-
-## Requirements
-
-- Python 3.8+
-- `mosquitto_sub` and `mosquitto_pub` (mosquitto-clients)
-- At least one AI CLI tool:
-  - Gemini CLI (`/opt/homebrew/bin/gemini`)
-  - Claude CLI (`npm i -g @anthropic-ai/claude-code`)
-  - Codex CLI (`npm i -g @openai/codex`)
-- MCP Python library (`mcp`)
-
-### Installation
-
-```bash
-# Install mosquitto clients
-brew install mosquitto  # macOS
-# or
-apt install mosquitto-clients  # Linux
-
-# Install Python dependencies
-pip install mcp
-
-# Install AI CLI tools (choose one or more)
-# Gemini - follow Google's Gemini CLI documentation
-# Claude
-npm i -g @anthropic-ai/claude-code
-# Codex/OpenAI
-npm i -g @openai/codex
-```
-
----
-
-## MCP Server Configuration
-
-The MCP server (`mcp_mqtt_server.py`) exposes MQTT tools to the AI. Each AI provider has its own way of registering MCP servers.
-
-### Gemini MCP Configuration
-
-Gemini looks for MCP servers in `~/.gemini/settings.json`. Add the mqtt-tools server:
-
-```json
-{
-  "mcpServers": {
-    "mqtt-tools": {
-      "command": "python3",
-      "args": ["/path/to/mqtt2ai/mcp_mqtt_server.py"],
-      "cwd": "/path/to/mqtt2ai"
-    }
-  }
-}
-```
-
-The daemon uses `--allowed-mcp-server-names mqtt-tools` to enable this server.
-
-### Claude MCP Configuration
-
-Claude uses a JSON config file. Create `~/.config/claude/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "mqtt-tools": {
-      "command": "python3",
-      "args": ["/path/to/mqtt2ai/mcp_mqtt_server.py"]
-    }
-  }
-}
-```
-
-Then run the daemon with:
-
-```bash
-python mqtt_ai_daemon.py --ai-provider claude --claude-mcp-config ~/.config/claude/mcp.json
-```
-
-### Codex/OpenAI MCP Configuration
-
-Codex uses a TOML config file at `~/.codex/config.toml`. Add:
-
-```toml
-[mcp_servers.mqtt-tools]
-command = "python3"
-args = ["/path/to/mqtt2ai/mcp_mqtt_server.py"]
-```
-
-The daemon will automatically use MCP servers configured in this file.
-
----
-
-## Usage
-
-### Run the Daemon
-
-```bash
-# With Gemini (default)
-python3 mqtt_ai_daemon.py
-
-# With Claude
-python3 mqtt_ai_daemon.py --ai-provider claude --claude-mcp-config ~/.config/claude/mcp.json
-
-# With Codex/OpenAI
-python3 mqtt_ai_daemon.py --ai-provider codex-openai
-
-# Verbose mode (print all messages)
-python3 mqtt_ai_daemon.py --verbose
-
-# No-AI mode (logging only, for testing triggers)
-python3 mqtt_ai_daemon.py --no-ai -v
-
-# Custom MQTT host
-python3 mqtt_ai_daemon.py --mqtt-host 192.168.1.50
-
-# Show all options
-python3 mqtt_ai_daemon.py --help
-```
-
-### Test with Simulated Devices
-
-```bash
-python mqtt_spawn_test_client.py
-```
-
----
-
 ## Example Learned Rule
 
 ```json
@@ -511,4 +535,3 @@ python mqtt_spawn_test_client.py
 ## License
 
 MIT License
-
