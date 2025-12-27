@@ -133,7 +133,7 @@ def sample_mqtt_messages():
 @pytest.fixture
 def mock_subprocess_run():
     """Mock subprocess.run for testing external commands.
-    
+
     Note: This is still used by some legacy code paths, but most MQTT
     publishing now uses paho-mqtt instead of subprocess.
     """
@@ -156,4 +156,11 @@ def create_text_file(filepath: str, content: str) -> None:
     """Helper to create a text file with content."""
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
+
+
+@pytest.fixture
+def mock_event_bus():
+    """Mock EventBus for testing."""
+    mock = MagicMock()
+    yield mock
 

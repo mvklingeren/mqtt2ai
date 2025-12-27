@@ -62,14 +62,14 @@ class PromptBuilder:
         trigger_reason: str = ""
     ) -> str:
         """Build an optimized prompt for AI analysis.
-        
+
         Args:
             messages_snapshot: Raw MQTT messages as newline-separated string
             kb: KnowledgeBase with rules, patterns, and rulebook
             trigger_results: Optional list of TriggerResult objects with trigger context.
                             Multiple triggers may fire between AI checks.
             trigger_reason: Human-readable trigger reason string
-            
+
         Returns:
             Optimized prompt string
         """
@@ -78,14 +78,16 @@ class PromptBuilder:
             trigger_results = []
         elif isinstance(trigger_results, TriggerResult):
             trigger_results = [trigger_results]
-        
+
         # Extract trigger topics from all trigger_results
         trigger_topics = self._extract_trigger_topics(trigger_results, trigger_reason)
         # Use first topic for backwards compatibility where single topic is expected
         trigger_topic = trigger_topics[0] if trigger_topics else None
 
         # Filter rules and patterns by relevance (using all trigger topics)
-        relevant_rules = self._filter_relevant_rules(kb.learned_rules, trigger_topic, trigger_topics=trigger_topics)
+        relevant_rules = self._filter_relevant_rules(
+            kb.learned_rules, trigger_topic, trigger_topics=trigger_topics
+        )
 
         # Build set of existing rule patterns for message annotation
         existing_patterns = self._build_existing_patterns_set(kb.learned_rules)
@@ -105,10 +107,12 @@ class PromptBuilder:
         demo_instruction = self._build_demo_instruction()
         # Pass both enabled rules (for display) and ALL rules (for skip patterns)
         all_rules = kb.learned_rules.get("rules", [])
-        rules_section = self._format_rules(relevant_rules, trigger_topic, all_rules, trigger_topics=trigger_topics)
+        rules_section = self._format_rules(
+            relevant_rules, trigger_topic, all_rules, trigger_topics=trigger_topics
+        )
         patterns_section = self._format_patterns(relevant_patterns)
         rejected_section = self._format_rejected(rejected_patterns)
-        
+
         # Add trigger context section if multiple triggers
         trigger_context = self._build_trigger_context(trigger_results)
 
@@ -135,7 +139,7 @@ class PromptBuilder:
         trigger_reason: str = ""
     ) -> str:
         """Build an extra-compact prompt for small context models.
-        
+
         Targets ~2000 tokens for Ollama/Groq.
         """
         # Normalize to list
@@ -143,7 +147,7 @@ class PromptBuilder:
             trigger_results = []
         elif isinstance(trigger_results, TriggerResult):
             trigger_results = [trigger_results]
-        
+
         trigger_topics = self._extract_trigger_topics(trigger_results, trigger_reason)
         trigger_topic = trigger_topics[0] if trigger_topics else None
 
@@ -154,7 +158,7 @@ class PromptBuilder:
 
         # Build set of existing rule patterns for message annotation
         existing_patterns = self._build_existing_patterns_set(kb.learned_rules)
-        
+
         # Compress messages with annotations
         compressed_messages = self._compress_messages(
             messages_snapshot, trigger_topic, existing_patterns=existing_patterns,
@@ -199,8 +203,9 @@ Tasks (in order):
    - Skip if rule already exists for this trigger→action
    - DO NOT send any MQTT messages during learning
 3. EXECUTE: ONLY if an ENABLED rule matches the CURRENT trigger → send_mqtt_message
-4. CREATE: After 3+ observations of same pattern → create_rule
-{security_alert}"""
+4. CREATE: After 3+ observations of same pattern → create_rule"""
+        if security_alert:
+            prompt += security_alert
         return prompt
 
     def _check_security_patterns(self, messages: str) -> str:
@@ -209,12 +214,15 @@ Tasks (in order):
         has_perimeter_motion = any(x in messages.lower() for x in [
             "parking", "outdoor", "driveway", "garden", "perimeter"
         ]) and "occupancy" in messages.lower()
-        
+
         has_entry_breach = "contact" in messages.lower() and "false" in messages.lower()
-        
+
         if has_perimeter_motion and has_entry_breach:
-            return "\n⚠️ SECURITY: Detected perimeter motion + entry breach pattern. Consider raise_alert()."
-        
+            return (
+                "\n⚠️ SECURITY: Detected perimeter motion + entry breach pattern. "
+                "Consider raise_alert()."
+            )
+
         return ""
 
     def _extract_trigger_topics(
@@ -223,64 +231,64 @@ Tasks (in order):
         trigger_reason: str
     ) -> List[str]:
         """Extract all triggering topics from trigger results and reason string.
-        
+
         Args:
             trigger_results: List of TriggerResult objects (may have .topic attribute)
             trigger_reason: Human-readable trigger reason string
-            
+
         Returns:
             List of unique trigger topics (preserves order)
         """
         topics = []
         seen = set()
-        
+
         # First, extract from TriggerResult objects (most reliable)
         for tr in trigger_results:
             if tr.topic and tr.topic not in seen:
                 topics.append(tr.topic)
                 seen.add(tr.topic)
-        
+
         # Also try to extract from trigger_reason string as fallback
         if "topic:" in trigger_reason.lower():
             match = re.search(r'topic:\s*(\S+)', trigger_reason, re.IGNORECASE)
             if match and match.group(1) not in seen:
                 topics.append(match.group(1))
                 seen.add(match.group(1))
-        
+
         # Look for zigbee2mqtt or similar patterns in reason
         for match in re.finditer(r'(zigbee2mqtt/\S+|homie/\S+|ring/\S+)', trigger_reason):
             topic = match.group(1)
             if topic not in seen:
                 topics.append(topic)
                 seen.add(topic)
-        
+
         return topics
-    
+
     def _build_trigger_context(self, trigger_results: List[TriggerResult]) -> str:
         """Build a trigger context section for multiple triggers.
-        
+
         When multiple triggers fire between AI checks, this section explains
         all of them so the AI can properly analyze the full context.
         """
         if not trigger_results:
             return ""
-        
+
         if len(trigger_results) == 1:
             # Single trigger - no special section needed
             return ""
-        
+
         lines = [
             f"\n## ⚠️ MULTIPLE TRIGGERS ({len(trigger_results)}) ⚠️",
             "The following events ALL triggered this AI check (analyze all):"
         ]
-        
+
         for i, tr in enumerate(trigger_results, 1):
             topic = tr.topic or "unknown"
             field = tr.field_name or "?"
             old_val = tr.old_value
             new_val = tr.new_value
             lines.append(f"  {i}. {topic}[{field}]: {old_val} → {new_val}")
-        
+
         lines.append("")  # Empty line for separation
         return '\n'.join(lines) + '\n'
 
@@ -289,7 +297,7 @@ Tasks (in order):
         learned_rules: Dict[str, Any]
     ) -> set:
         """Build a set of (trigger_topic, trigger_field, action_topic) tuples from existing rules.
-        
+
         This is used to annotate MQTT messages that match existing patterns,
         making it visually clear to the AI that these patterns are already learned.
         """
@@ -325,7 +333,7 @@ Tasks (in order):
         lines = messages_snapshot.strip().split('\n')
         if not lines:
             return ""
-        
+
         # Build set of all trigger topics for efficient lookup
         topics_to_highlight = set()
         if trigger_topic:
@@ -378,7 +386,7 @@ Tasks (in order):
                 stats.count += 1
                 stats.timestamp = timestamp  # Update to latest
                 stats.payload = payload  # Update to latest payload
-                
+
                 # Track numeric ranges
                 for field_name in self.NUMERIC_FIELDS:
                     if field_name in payload:
@@ -420,7 +428,7 @@ Tasks (in order):
             # Check if this is an automated action announcement
             # These messages indicate actions taken by the rule engine or AI
             is_auto_announce = stats.topic.startswith("mqtt2ai/action/")
-            
+
             # Check if this topic was the target of an automated action
             # (i.e., it appears in an announce message's action_topic)
             is_auto_action = stats.topic in auto_action_topics
@@ -456,7 +464,7 @@ Tasks (in order):
         self, line: str
     ) -> Optional[Tuple[str, str, Dict[str, Any]]]:
         """Parse a message line into (timestamp, topic, payload).
-        
+
         Expected format: [HH:MM:SS] topic/path {"key": "value"}
         """
         try:
@@ -464,7 +472,7 @@ Tasks (in order):
             ts_match = re.match(r'\[(\d{2}:\d{2}:\d{2})\]\s*', line)
             if not ts_match:
                 return None
-            
+
             timestamp = ts_match.group(1)
             rest = line[ts_match.end():]
 
@@ -512,10 +520,10 @@ Tasks (in order):
         """Format a MessageStats as a compressed line."""
         topic = self._shorten_topic(stats.topic)
         payload_str = self._format_payload(stats.payload)
-        
+
         # Add count suffix if > 1
         count_suffix = f" ({stats.count}x)" if stats.count > 1 else ""
-        
+
         # Add range info for numeric fields if significantly different
         range_info = ""
         for field_name, (min_val, max_val) in stats.numeric_ranges.items():
@@ -532,20 +540,20 @@ Tasks (in order):
         trigger_topics: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """Filter rules to those relevant to the trigger(s).
-        
+
         Args:
             learned_rules: Full learned rules dict
             trigger_topic: Primary topic that triggered analysis (backwards compat)
             strict: If True, only exact matches; if False, also include recent rules
             trigger_topics: List of all trigger topics (when multiple triggers fired)
-            
+
         Returns:
             List of relevant rule dicts
         """
         rules = learned_rules.get("rules", [])
         if not rules:
             return []
-        
+
         # Build set of all trigger topics for efficient lookup
         topics_to_match = set()
         if trigger_topic:
@@ -562,7 +570,7 @@ Tasks (in order):
                 continue
 
             rule_trigger_topic = rule.get("trigger", {}).get("topic", "")
-            
+
             # Check if matches any trigger topic
             if rule_trigger_topic in topics_to_match:
                 relevant.append(rule)
@@ -586,7 +594,7 @@ Tasks (in order):
         # Otherwise, return all enabled rules
         if relevant:
             return relevant
-        
+
         # Return all enabled rules if no specific matches (other list has enabled rules)
         return other if not strict else []
 
@@ -600,7 +608,7 @@ Tasks (in order):
         patterns = pending_patterns.get("patterns", [])
         if not patterns:
             return []
-        
+
         # Build set of all trigger topics for efficient lookup
         topics_to_match = set()
         if trigger_topic:
@@ -611,7 +619,7 @@ Tasks (in order):
         relevant = []
         for pattern in patterns:
             pattern_trigger = pattern.get("trigger_topic", "")
-            
+
             # Include if matches any trigger topic or is being actively tracked
             if pattern_trigger in topics_to_match:
                 relevant.append(pattern)
@@ -629,7 +637,7 @@ Tasks (in order):
         trigger_topics: Optional[List[str]] = None
     ) -> str:
         """Format rules section for prompt.
-        
+
         Args:
             rules: Filtered/enabled rules to display for execution
             trigger_topic: Primary topic that triggered analysis (backwards compat)
@@ -642,7 +650,7 @@ Tasks (in order):
             topics_to_match.add(trigger_topic)
         if trigger_topics:
             topics_to_match.update(trigger_topics)
-        
+
         # Display section for enabled rules
         if not rules:
             rules_section = "\n## Learned Rules: None yet.\n"
@@ -653,11 +661,11 @@ Tasks (in order):
                 trigger = rule.get("trigger", {})
                 action = rule.get("action", {})
                 occurrences = rule.get("confidence", {}).get("occurrences", 0)
-                
+
                 # Mark if this matches any trigger topic
                 rule_topic = trigger.get("topic")
                 marker = " ← MATCHES" if rule_topic in topics_to_match else ""
-                
+
                 lines.append(
                     f"- {rule_id}: {rule_topic} "
                     f"[{trigger.get('field')}={trigger.get('value')}] "
@@ -673,7 +681,8 @@ Tasks (in order):
         # Add explicit SKIP PATTERNS section to prevent redundant tool calls
         skip_lines = [
             "\n## ⚠️ SKIP PATTERNS - RULES ALREADY EXIST ⚠️",
-            "These patterns are ALREADY LEARNED. Calling record_pattern_observation or create_rule for these is WASTEFUL:",
+            "These patterns are ALREADY LEARNED. "
+            "Calling record_pattern_observation or create_rule for these is WASTEFUL:",
         ]
         for rule in skip_rules:
             trigger = rule.get("trigger", {})
@@ -730,8 +739,10 @@ Tasks (in order):
         if self.config.demo_mode:
             return (
                 "**🎭 DEMO MODE ENABLED**\n"
-                "Your ONLY task: Send ONE joke to the `jokes/` topic using send_mqtt_message, then STOP.\n"
-                "DO NOT: record patterns, create rules, analyze messages, or make any other tool calls.\n"
+                "Your ONLY task: Send ONE joke to the `jokes/` topic using "
+                "send_mqtt_message, then STOP.\n"
+                "DO NOT: record patterns, create rules, analyze messages, "
+                "or make any other tool calls.\n"
                 "After sending the joke, your response is complete.\n\n"
             )
         return ""

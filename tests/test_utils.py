@@ -190,13 +190,13 @@ def mock_paho_client():
     with patch("utils.mqtt.Client") as mock_client_class:
         mock_instance = MagicMock()
         mock_client_class.return_value = mock_instance
-        
+
         # Mock publish result
         mock_result = MagicMock()
         mock_result.rc = 0  # MQTT_ERR_SUCCESS
         mock_result.wait_for_publish = MagicMock()
         mock_instance.publish.return_value = mock_result
-        
+
         yield mock_instance
 
 
@@ -204,9 +204,9 @@ def mock_paho_client():
 def reset_utils_client():
     """Reset the module-level MQTT client before each test."""
     import utils
-    utils._mqtt_client = None
+    utils._MQTT_CLIENT = None
     yield
-    utils._mqtt_client = None
+    utils._MQTT_CLIENT = None
 
 
 class TestPublishMqtt:
@@ -256,7 +256,7 @@ class TestPublishMqtt:
         """Test MQTT publish when publish fails."""
         mock_result = mock_paho_client.publish.return_value
         mock_result.rc = 1  # Not SUCCESS
-        
+
         result = publish_mqtt("test/topic", {"state": "ON"})
 
         assert result is False

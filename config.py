@@ -43,7 +43,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
     ai_check_threshold: int = 300  # Trigger AI after 300 messages
     disable_interval_trigger: bool = False  # Disable time-based AI triggers
     disable_threshold_trigger: bool = False  # Disable message count-based AI triggers
-    
+
     # Device state tracking for alert system
     device_track_pattern: str = "zigbee2mqtt/*"  # Glob pattern for topics to track
 
@@ -72,7 +72,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
     # OpenAI-compatible API (Groq, Ollama, LM Studio, vLLM, etc.)
     openai_api_base: str = "https://api.groq.com/openai/v1"  # Groq (blazing fast!)
     openai_api_key: str = ""  # Set via GROQ_API_KEY or --openai-api-key
-    openai_models: List[str] = field(default_factory=lambda: DEFAULT_OPENAI_MODELS.copy())
+    openai_models: List[str] = field(default_factory=DEFAULT_OPENAI_MODELS.copy)
     _model_index: int = field(default=0, repr=False)  # Internal counter for round-robin
 
     def get_next_model(self) -> str:
@@ -98,7 +98,9 @@ class Config:  # pylint: disable=too-many-instance-attributes
     test_ai: bool = False  # Test AI connection before starting daemon
     # If True, new rules are disabled by default. Set via env var or --disable-new-rules
     disable_new_rules: bool = field(
-        default_factory=lambda: os.environ.get("DISABLE_NEW_RULES", "").lower() in ("1", "true", "yes")
+        default_factory=lambda: os.environ.get(
+            "DISABLE_NEW_RULES", ""
+        ).lower() in ("1", "true", "yes")
     )
     skip_printing_seconds: int = 3
     ignore_printing_topics: List[str] = field(

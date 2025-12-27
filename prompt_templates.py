@@ -1,3 +1,9 @@
+"""Templates for system prompts and rulebooks.
+
+This module contains the constant strings used for system prompts, rulebooks,
+and other static text content used by the AI agent.
+"""
+
 # Compact rulebook - core rules only, no verbose documentation
 COMPACT_RULEBOOK = """## Core Rules
 

@@ -32,28 +32,28 @@ class MqttClient:
 
     def connect(self) -> bool:
         """Establish a persistent connection to the MQTT broker.
-        
+
         Returns:
             True if connection was successful, False otherwise.
         """
         if self._client is not None and self._connected.is_set():
             return True
-        
+
         with self._lock:
             if self._client is not None and self._connected.is_set():
                 return True
-            
+
             try:
                 # Create client with protocol v5 for modern MQTT
                 self._client = mqtt.Client(
                     callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
                     protocol=mqtt.MQTTv311
                 )
-                
+
                 # Set up callbacks
                 self._client.on_connect = self._on_connect
                 self._client.on_disconnect = self._on_disconnect
-                
+
                 # Connect to broker
                 port = int(self.config.mqtt_port)
                 logging.info(
@@ -61,17 +61,16 @@ class MqttClient:
                     self.config.mqtt_host, port
                 )
                 self._client.connect(self.config.mqtt_host, port, keepalive=60)
-                
+
                 # Start the network loop in a background thread
                 self._client.loop_start()
-                
+
                 # Wait for connection with timeout
                 if self._connected.wait(timeout=10.0):
                     return True
-                else:
-                    logging.error("MQTT connection timeout")
-                    return False
-                    
+                logging.error("MQTT connection timeout")
+                return False
+
             except Exception as e:
                 logging.error("Failed to connect to MQTT broker: %s", e)
                 self._client = None
@@ -131,14 +130,14 @@ class MqttClient:
         msg: mqtt.MQTTMessage
     ):
         """Callback when a message is received on a subscribed topic.
-        
+
         Puts the message (topic, payload) tuple into the message queue
         for processing by the daemon.
         """
         if self._message_queue is None:
             logging.warning("Received message but no queue configured")
             return
-        
+
         try:
             payload = msg.payload.decode("utf-8", errors="replace")
             self._message_queue.put((msg.topic, payload))
@@ -147,28 +146,28 @@ class MqttClient:
 
     def subscribe(self, topics: list[str], message_queue: queue.Queue) -> bool:
         """Subscribe to MQTT topics and put received messages in the queue.
-        
+
         Uses the persistent paho-mqtt connection. Will connect if not already
         connected. Subscriptions are automatically restored on reconnection.
-        
+
         Args:
             topics: List of MQTT topic patterns to subscribe to.
             message_queue: Queue where received (topic, payload) tuples are put.
-            
+
         Returns:
             True if subscriptions were successful, False otherwise.
         """
         self._message_queue = message_queue
-        
+
         # Ensure we're connected
         if not self._connected.is_set():
             if not self.connect():
                 logging.error("Cannot subscribe: not connected to MQTT broker")
                 return False
-        
+
         # Set the message callback
         self._client.on_message = self._on_message
-        
+
         # Subscribe to each topic
         try:
             for topic in topics:
@@ -196,10 +195,10 @@ class MqttClient:
         reason: Optional[str] = None
     ):
         """Publish a causation announcement before an automated action.
-        
+
         This allows pattern learning to skip actions that were automated
         (not user-initiated).
-        
+
         Args:
             source: Source of the action ("direct_rule" or "ai_analysis")
             action_topic: The MQTT topic being acted upon
@@ -221,44 +220,43 @@ class MqttClient:
             "reason": reason,
             "timestamp": datetime.now().isoformat()
         }
-        
+
         # Remove None values for cleaner JSON
         announcement = {k: v for k, v in announcement.items() if v is not None}
-        
+
         self.publish(ANNOUNCE_TOPIC, json.dumps(announcement))
 
     def publish(self, topic: str, payload: str) -> bool:
         """Publish a message to the MQTT broker.
-        
+
         Uses the persistent paho-mqtt connection. Will attempt to connect
         if not already connected.
-        
+
         Args:
             topic: The MQTT topic to publish to.
             payload: The message payload as a string.
-            
+
         Returns:
             True if the message was published successfully, False otherwise.
         """
         logging.info("-> Sending MQTT: Topic='%s', Payload='%s'", topic, payload)
-        
+
         # Ensure we're connected
         if not self._connected.is_set():
             if not self.connect():
                 logging.error("Cannot publish: not connected to MQTT broker")
                 return False
-        
+
         try:
             result = self._client.publish(topic, payload, qos=1)
             # Wait for publish to complete with timeout
             result.wait_for_publish(timeout=5.0)
-            
+
             if result.rc == mqtt.MQTT_ERR_SUCCESS:
                 return True
-            else:
-                logging.error("MQTT publish failed with code: %s", result.rc)
-                return False
-                
+            logging.error("MQTT publish failed with code: %s", result.rc)
+            return False
+
         except Exception as e:
             logging.error("Error publishing MQTT message: %s", e)
             return False

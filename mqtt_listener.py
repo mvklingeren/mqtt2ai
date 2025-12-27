@@ -24,16 +24,16 @@ GEMINI_CLI_COMMAND = "/opt/homebrew/bin/gemini"
 CHECK_INTERVAL_SECONDS = 10
 
 # Module-level MQTT client for publishing
-_mqtt_client: Optional[mqtt.Client] = None
+_MQTT_CLIENT: Optional[mqtt.Client] = None
 
 
 def _get_mqtt_client() -> Optional[mqtt.Client]:
     """Get or create the module-level MQTT client for publishing."""
-    global _mqtt_client
-    
-    if _mqtt_client is not None:
-        return _mqtt_client
-    
+    global _MQTT_CLIENT
+
+    if _MQTT_CLIENT is not None:
+        return _MQTT_CLIENT
+
     try:
         client = mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
@@ -41,7 +41,7 @@ def _get_mqtt_client() -> Optional[mqtt.Client]:
         )
         client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
         client.loop_start()
-        _mqtt_client = client
+        _MQTT_CLIENT = client
         return client
     except Exception as e:
         print(f"Error connecting to MQTT broker: {e}", file=sys.stderr)
@@ -51,19 +51,19 @@ def _get_mqtt_client() -> Optional[mqtt.Client]:
 def send_mqtt_message(topic, payload):
     """Publish a generic message to a specified MQTT topic using paho-mqtt."""
     print(f"  -> Sending MQTT: Topic='{topic}', Payload='{payload}'")
-    
+
     try:
         client = _get_mqtt_client()
         if client is None:
             print("Error: Could not connect to MQTT broker.", file=sys.stderr)
             return
-        
+
         result = client.publish(topic, payload, qos=1)
         result.wait_for_publish(timeout=5.0)
-        
+
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
             print(f"Error publishing MQTT: rc={result.rc}", file=sys.stderr)
-            
+
     except Exception as e:
         print(f"Error sending MQTT message: {e}", file=sys.stderr)
 

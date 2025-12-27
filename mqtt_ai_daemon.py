@@ -14,6 +14,7 @@ import time
 from config import Config
 from daemon import MqttAiDaemon
 from ai_agent import AiAgent
+from event_bus import event_bus # Import event_bus here
 
 
 def main():
@@ -34,7 +35,7 @@ def main():
         provider = config.ai_provider.upper()
         logging.info("Testing AI connection [%s]...", provider)
 
-        ai_agent = AiAgent(config)
+        ai_agent = AiAgent(config, event_bus=event_bus)
         success, message = ai_agent.test_connection()
 
         if success:

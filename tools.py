@@ -21,24 +21,24 @@ REJECTED_PATTERNS_FILE = "rejected_patterns.json"
 
 # Module-level config for disable_new_rules setting
 # TODO: Move this to RuntimeContext or Config
-_disable_new_rules = False
+_DISABLE_NEW_RULES = False
 
 def set_disable_new_rules(disable: bool) -> None:
     """Set whether new rules should be disabled by default.
-    
+
     Args:
         disable: If True, new rules are created in disabled state
     """
-    global _disable_new_rules
-    _disable_new_rules = disable
+    global _DISABLE_NEW_RULES
+    _DISABLE_NEW_RULES = disable
 
 
 def _get_mqtt_client(context: Optional['RuntimeContext'] = None):
     """Get the MQTT client from context.
-    
+
     Args:
         context: Optional RuntimeContext with mqtt_client
-        
+
     Returns:
         The MQTT client, or None if not available
     """
@@ -141,7 +141,7 @@ def create_rule(
             "occurrences": 3,
             "last_triggered": datetime.now().isoformat()
         },
-        "enabled": not _disable_new_rules
+        "enabled": not _DISABLE_NEW_RULES
     }
 
     # Check if this pattern has been rejected
@@ -264,7 +264,7 @@ def _rule_exists_for_pattern(
 ) -> bool:
     """Check if a rule already exists for this trigger->action pattern."""
     rules_data = load_json_file(LEARNED_RULES_FILE, {"rules": []})
-    
+
     for rule in rules_data["rules"]:
         if (rule.get("trigger", {}).get("topic") == trigger_topic and
                 rule.get("trigger", {}).get("field") == trigger_field and

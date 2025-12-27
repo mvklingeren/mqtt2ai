@@ -23,7 +23,7 @@ class AssertionResult:
 
 class ScenarioValidator:
     """Validates collected events against scenario assertions.
-    
+
     Assertion types supported:
     - trigger_count: Count of trigger events for a topic/field
     - tool_called: AI tool was called with optional argument matching
@@ -33,7 +33,7 @@ class ScenarioValidator:
 
     def __init__(self, assertions: Dict[str, dict]):
         """Initialize with assertions dictionary from scenario.
-        
+
         Args:
             assertions: Dict mapping assertion IDs to assertion configs
         """
@@ -41,7 +41,7 @@ class ScenarioValidator:
 
     def validate(self) -> List[AssertionResult]:
         """Validate all assertions against collected events.
-        
+
         Returns:
             List of AssertionResult for each assertion
         """
@@ -54,7 +54,7 @@ class ScenarioValidator:
     def _check_assertion(self, assertion_id: str, assertion: dict) -> AssertionResult:
         """Check a single assertion."""
         assertion_type = assertion.get("type", "unknown")
-        
+
         handlers = {
             "trigger_count": self._check_trigger_count,
             "tool_called": self._check_tool_called,
@@ -62,11 +62,11 @@ class ScenarioValidator:
             "rule_not_matched": self._check_rule_not_matched,
             "file_state": self._check_file_state,
         }
-        
+
         handler = handlers.get(assertion_type)
         if handler:
             return handler(assertion_id, assertion)
-        
+
         return AssertionResult(
             id=assertion_id,
             passed=False,
@@ -76,35 +76,35 @@ class ScenarioValidator:
     def _check_trigger_count(self, assertion_id: str, assertion: dict) -> AssertionResult:
         """Check count of TRIGGER_FIRED events matching criteria."""
         events = event_bus.get_events(EventType.TRIGGER_FIRED)
-        
+
         topic = assertion.get("topic")
         field = assertion.get("field")
         min_count = assertion.get("min", 1)
         max_count = assertion.get("max")
-        
+
         matching = events
         if topic:
             matching = [e for e in matching if e.data.get("topic") == topic]
         if field:
             matching = [e for e in matching if e.data.get("field") == field]
-        
+
         count = len(matching)
-        
+
         # Check min/max constraints
         passed = count >= min_count
         if max_count is not None and count > max_count:
             passed = False
-        
+
         expected = f">= {min_count}"
         if max_count is not None:
             expected = f"{min_count}-{max_count}"
-        
+
         filter_desc = ""
         if topic:
             filter_desc += f" topic={topic}"
         if field:
             filter_desc += f" field={field}"
-        
+
         return AssertionResult(
             id=assertion_id,
             passed=passed,
@@ -116,14 +116,14 @@ class ScenarioValidator:
     def _check_tool_called(self, assertion_id: str, assertion: dict) -> AssertionResult:
         """Check if AI called a specific tool."""
         events = event_bus.get_events(EventType.AI_TOOL_CALLED)
-        
+
         tool_name = assertion.get("tool")
         args_contain = assertion.get("args_contain", {})
         count_min = assertion.get("count_min", 1)
-        
+
         # Filter by tool name
         matching = [e for e in events if e.data.get("tool") == tool_name]
-        
+
         # Filter by args if specified
         if args_contain:
             filtered = []
@@ -132,14 +132,14 @@ class ScenarioValidator:
                 if self._dict_contains(args, args_contain):
                     filtered.append(e)
             matching = filtered
-        
+
         count = len(matching)
         passed = count >= count_min
-        
+
         args_desc = ""
         if args_contain:
             args_desc = f" with {args_contain}"
-        
+
         return AssertionResult(
             id=assertion_id,
             passed=passed,
@@ -151,27 +151,27 @@ class ScenarioValidator:
     def _check_rule_executed(self, assertion_id: str, assertion: dict) -> AssertionResult:
         """Check if rules were executed by RuleEngine."""
         events = event_bus.get_events(EventType.RULE_EXECUTED)
-        
+
         rule_id = assertion.get("rule_id")
         rule_id_contains = assertion.get("rule_id_contains")
         count_min = assertion.get("count_min", 1)
-        
+
         matching = events
         if rule_id:
             matching = [e for e in matching if e.data.get("rule_id") == rule_id]
         elif rule_id_contains:
-            matching = [e for e in matching 
+            matching = [e for e in matching
                        if rule_id_contains in str(e.data.get("rule_id", ""))]
-        
+
         count = len(matching)
         passed = count >= count_min
-        
+
         filter_desc = ""
         if rule_id:
             filter_desc = f" rule_id={rule_id}"
         elif rule_id_contains:
             filter_desc = f" rule_id contains '{rule_id_contains}'"
-        
+
         return AssertionResult(
             id=assertion_id,
             passed=passed,
@@ -183,19 +183,19 @@ class ScenarioValidator:
     def _check_rule_not_matched(self, assertion_id: str, assertion: dict) -> AssertionResult:
         """Check count of triggers that went to AI (no rule matched)."""
         events = event_bus.get_events(EventType.RULE_NOT_MATCHED)
-        
+
         count_min = assertion.get("count_min", 1)
         count_max = assertion.get("count_max")
-        
+
         count = len(events)
         passed = count >= count_min
         if count_max is not None and count > count_max:
             passed = False
-        
+
         expected = f">= {count_min}"
         if count_max is not None:
             expected = f"{count_min}-{count_max}"
-        
+
         return AssertionResult(
             id=assertion_id,
             passed=passed,
@@ -209,7 +209,7 @@ class ScenarioValidator:
         file_path = assertion.get("file")
         rules_min = assertion.get("rules_min")
         patterns_min = assertion.get("patterns_min")
-        
+
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -229,7 +229,7 @@ class ScenarioValidator:
                 expected="Valid JSON",
                 actual="Parse error"
             )
-        
+
         # Check rules count
         if rules_min is not None:
             rules = data.get("rules", [])
@@ -242,7 +242,7 @@ class ScenarioValidator:
                 expected=f">= {rules_min}",
                 actual=str(count)
             )
-        
+
         # Check patterns count
         if patterns_min is not None:
             patterns = data.get("patterns", [])
@@ -255,7 +255,7 @@ class ScenarioValidator:
                 expected=f">= {patterns_min}",
                 actual=str(count)
             )
-        
+
         return AssertionResult(
             id=assertion_id,
             passed=True,
@@ -276,55 +276,55 @@ class ScenarioValidator:
 
 def print_test_report(results: List[AssertionResult], scenario_name: str = "") -> bool:
     """Print colored test report to terminal.
-    
+
     Args:
         results: List of assertion results
         scenario_name: Optional scenario name for header
-        
+
     Returns:
         True if all assertions passed, False otherwise
     """
     green, red, yellow, reset = "\033[92m", "\033[91m", "\033[93m", "\033[0m"
     bold, dim = "\033[1m", "\033[2m"
-    
+
     passed_count = sum(1 for r in results if r.passed)
     total = len(results)
     all_passed = passed_count == total
-    
+
     print(f"\n{'='*60}")
     print(f"{bold}TEST RESULTS{reset}")
     if scenario_name:
         print(f"{dim}Scenario: {scenario_name}{reset}")
     print('='*60)
-    
+
     for r in results:
         if r.passed:
             status = f"{green}PASS{reset}"
         else:
             status = f"{red}FAIL{reset}"
-        
+
         print(f"[{status}] {bold}{r.id}{reset}: {r.message}")
-        
+
         if not r.passed and r.expected:
             print(f"       {dim}Expected: {r.expected}{reset}")
             print(f"       {dim}Actual:   {r.actual}{reset}")
-    
+
     print()
     if all_passed:
         print(f"{green}{bold}{passed_count}/{total} assertions passed{reset}")
     else:
         print(f"{red}{bold}{passed_count}/{total} assertions passed{reset}")
     print()
-    
+
     return all_passed
 
 
-def write_json_report(results: List[AssertionResult], 
+def write_json_report(results: List[AssertionResult],
                       output_path: str,
                       scenario_name: str = "",
                       duration_seconds: float = 0.0) -> None:
     """Write test results to a JSON file for CI/CD integration.
-    
+
     Args:
         results: List of assertion results
         output_path: Path to write JSON report
@@ -332,7 +332,7 @@ def write_json_report(results: List[AssertionResult],
         duration_seconds: Total test duration
     """
     from datetime import datetime
-    
+
     report = {
         "scenario": scenario_name,
         "timestamp": datetime.now().isoformat(),
@@ -352,10 +352,10 @@ def write_json_report(results: List[AssertionResult],
             for r in results
         ]
     }
-    
+
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
-    
+
     logging.info("Test report written to %s", output_path)
 
 

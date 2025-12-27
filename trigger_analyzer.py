@@ -71,7 +71,7 @@ class TriggerAnalyzer:
         simulation_mode: bool = False
     ):
         """Initialize the analyzer with configuration from a JSON file.
-        
+
         Args:
             config_path: Path to the trigger configuration JSON file
             simulation_mode: If True, disables cooldown to allow rapid triggering
@@ -121,14 +121,14 @@ class TriggerAnalyzer:
 
     def _is_on_cooldown(self, topic_state: TopicState) -> bool:
         """Check if the topic is still in cooldown period.
-        
+
         In simulation mode, cooldown is disabled to allow rapid triggering
         for testing pattern learning.
         """
         # Disable cooldown in simulation mode
         if self.simulation_mode:
             return False
-        
+
         if topic_state.last_trigger_time == 0:
             return False
         elapsed = time.time() - topic_state.last_trigger_time

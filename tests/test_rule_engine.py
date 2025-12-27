@@ -117,12 +117,12 @@ class TestRuleEngineMatching:
     def test_matches_exact_rule(self, mock_mqtt_client, kb_with_rules, trigger_result_match):
         """Test that a matching rule is detected."""
         engine = RuleEngine(mock_mqtt_client, kb_with_rules)
-        
+
         topic = "zigbee2mqtt/test_pir"
         payload_str = '{"occupancy": true, "battery": 85}'
-        
+
         result = engine.check_and_execute(topic, payload_str, trigger_result_match)
-        
+
         assert result is True
         # Should have published 2 messages: announcement + action
         assert mock_mqtt_client.publish.call_count == 2
@@ -130,76 +130,76 @@ class TestRuleEngineMatching:
     def test_no_match_different_topic(self, mock_mqtt_client, kb_with_rules, trigger_result_match):
         """Test that wrong topic doesn't match."""
         engine = RuleEngine(mock_mqtt_client, kb_with_rules)
-        
+
         topic = "zigbee2mqtt/other_pir"  # Different topic
         payload_str = '{"occupancy": true}'
-        
+
         result = engine.check_and_execute(topic, payload_str, trigger_result_match)
-        
+
         assert result is False
         mock_mqtt_client.publish.assert_not_called()
 
     def test_no_match_different_field(self, mock_mqtt_client, kb_with_rules, trigger_result_no_match):
         """Test that wrong field doesn't match."""
         engine = RuleEngine(mock_mqtt_client, kb_with_rules)
-        
+
         topic = "zigbee2mqtt/test_pir"
         payload_str = '{"contact": false}'
-        
+
         result = engine.check_and_execute(topic, payload_str, trigger_result_no_match)
-        
+
         assert result is False
         mock_mqtt_client.publish.assert_not_called()
 
     def test_no_trigger_returns_false(self, mock_mqtt_client, kb_with_rules, trigger_result_no_trigger):
         """Test that non-triggering events return False immediately."""
         engine = RuleEngine(mock_mqtt_client, kb_with_rules)
-        
+
         topic = "zigbee2mqtt/test_pir"
         payload_str = '{"occupancy": true}'
-        
+
         result = engine.check_and_execute(topic, payload_str, trigger_result_no_trigger)
-        
+
         assert result is False
         mock_mqtt_client.publish.assert_not_called()
 
-    def test_disabled_rule_not_executed(self, mock_mqtt_client, config_with_temp_files, 
+    def test_disabled_rule_not_executed(self, mock_mqtt_client, config_with_temp_files,
                                          disabled_rule, trigger_result_match):
         """Test that disabled rules are not executed."""
         kb = KnowledgeBase(config_with_temp_files)
         kb.learned_rules = {"rules": [disabled_rule]}
-        
+
         engine = RuleEngine(mock_mqtt_client, kb)
-        
+
         topic = "zigbee2mqtt/test_pir"
         payload_str = '{"occupancy": true}'
-        
+
         result = engine.check_and_execute(topic, payload_str, trigger_result_match)
-        
+
         assert result is False
         mock_mqtt_client.publish.assert_not_called()
 
     def test_invalid_json_returns_false(self, mock_mqtt_client, kb_with_rules, trigger_result_match):
         """Test that invalid JSON payloads return False."""
         engine = RuleEngine(mock_mqtt_client, kb_with_rules)
-        
+
         topic = "zigbee2mqtt/test_pir"
         payload_str = "not valid json"
-        
+
         result = engine.check_and_execute(topic, payload_str, trigger_result_match)
-        
+
         assert result is False
         mock_mqtt_client.publish.assert_not_called()
 
     def test_non_dict_payload_returns_false(self, mock_mqtt_client, kb_with_rules, trigger_result_match):
         """Test that non-dict JSON payloads return False."""
         engine = RuleEngine(mock_mqtt_client, kb_with_rules)
-        
+
         topic = "zigbee2mqtt/test_pir"
         payload_str = '["array", "not", "dict"]'
-        
+
         result = engine.check_and_execute(topic, payload_str, trigger_result_match)
-        
+
         assert result is False
         mock_mqtt_client.publish.assert_not_called()
 
@@ -207,24 +207,24 @@ class TestRuleEngineMatching:
 class TestRuleEngineExecution:
     """Tests for rule execution and announcement."""
 
-    def test_announcement_published_before_action(self, mock_mqtt_client, kb_with_rules, 
+    def test_announcement_published_before_action(self, mock_mqtt_client, kb_with_rules,
                                                    trigger_result_match):
         """Test that announcement is published before the action."""
         engine = RuleEngine(mock_mqtt_client, kb_with_rules)
-        
+
         topic = "zigbee2mqtt/test_pir"
         payload_str = '{"occupancy": true}'
-        
+
         engine.check_and_execute(topic, payload_str, trigger_result_match)
-        
+
         # Check call order: announcement first, then action
         calls = mock_mqtt_client.publish.call_args_list
         assert len(calls) == 2
-        
+
         # First call should be to announce topic
         announce_topic, announce_payload = calls[0][0]
         assert announce_topic == "mqtt2ai/action/announce"
-        
+
         # Second call should be to action topic
         action_topic, action_payload = calls[1][0]
         assert action_topic == "zigbee2mqtt/test_light/set"
@@ -234,16 +234,16 @@ class TestRuleEngineExecution:
                                                     trigger_result_match):
         """Test that announcement contains all required fields."""
         engine = RuleEngine(mock_mqtt_client, kb_with_rules)
-        
+
         topic = "zigbee2mqtt/test_pir"
         payload_str = '{"occupancy": true}'
-        
+
         engine.check_and_execute(topic, payload_str, trigger_result_match)
-        
+
         # Parse the announcement payload
         announce_call = mock_mqtt_client.publish.call_args_list[0]
         announce_payload = json.loads(announce_call[0][1])
-        
+
         # Check required fields
         assert announce_payload["source"] == "direct_rule"
         assert announce_payload["rule_id"] == "test_pir_to_light"
@@ -271,14 +271,14 @@ class TestRuleEngineExecution:
             },
             "enabled": True
         }]}
-        
+
         engine = RuleEngine(mock_mqtt_client, kb)
-        
+
         topic = "zigbee2mqtt/test_pir"
         payload_str = '{"occupancy": true}'  # Boolean in payload
-        
+
         result = engine.check_and_execute(topic, payload_str, trigger_result_match)
-        
+
         assert result is True
 
 
@@ -301,19 +301,19 @@ class TestRuleEngineMultipleRules:
             },
             "enabled": True
         }
-        
+
         kb = KnowledgeBase(config_with_temp_files)
         kb.learned_rules = {"rules": [sample_rule, second_rule]}
-        
+
         engine = RuleEngine(mock_mqtt_client, kb)
-        
+
         topic = "zigbee2mqtt/test_pir"
         payload_str = '{"occupancy": true}'
-        
+
         result = engine.check_and_execute(topic, payload_str, trigger_result_match)
-        
+
         assert result is True
-        
+
         # Only first rule's action should be executed
         action_call = mock_mqtt_client.publish.call_args_list[1]
         assert action_call[0][0] == "zigbee2mqtt/test_light/set"
@@ -323,14 +323,14 @@ class TestRuleEngineMultipleRules:
         """Test that no rules returns False."""
         kb = KnowledgeBase(config_with_temp_files)
         kb.learned_rules = {"rules": []}
-        
+
         engine = RuleEngine(mock_mqtt_client, kb)
-        
+
         topic = "zigbee2mqtt/test_pir"
         payload_str = '{"occupancy": true}'
-        
+
         result = engine.check_and_execute(topic, payload_str, trigger_result_match)
-        
+
         assert result is False
         mock_mqtt_client.publish.assert_not_called()
 

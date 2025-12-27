@@ -1,6 +1,6 @@
 """Tests for the PromptBuilder module."""
-import pytest
 from unittest.mock import MagicMock
+import pytest
 
 from prompt_builder import PromptBuilder, MessageStats, COMPACT_RULEBOOK
 from trigger_analyzer import TriggerResult
@@ -42,7 +42,7 @@ class TestMessageCompression(TestPromptBuilder):
     def test_compress_removes_noise_fields(self, builder, sample_messages_snapshot):
         """Test that noise fields like linkquality and voltage are removed."""
         compressed = builder._compress_messages(sample_messages_snapshot, None)
-        
+
         assert "linkquality" not in compressed
         assert "voltage" not in compressed
         # Useful fields should remain
@@ -57,9 +57,9 @@ class TestMessageCompression(TestPromptBuilder):
 [12:00:03] zigbee2mqtt/pir {"occupancy":true}
 [12:00:04] zigbee2mqtt/pir {"occupancy":true}
 [12:00:05] zigbee2mqtt/pir {"occupancy":true}"""
-        
+
         compressed = builder._compress_messages(snapshot, None)
-        
+
         # Should contain count indicator
         assert "(5x)" in compressed
         # Should only have one line for this topic (plus maybe omitted message)
@@ -70,11 +70,11 @@ class TestMessageCompression(TestPromptBuilder):
         """Test that trigger topic is marked with (TRIGGER) suffix."""
         snapshot = """[12:00:01] zigbee2mqtt/hallway_pir {"occupancy":true}
 [12:00:02] zigbee2mqtt/other_sensor {"state":"ON"}"""
-        
+
         compressed = builder._compress_messages(
             snapshot, trigger_topic="zigbee2mqtt/hallway_pir"
         )
-        
+
         assert "(TRIGGER)" in compressed
 
     def test_compress_tracks_numeric_ranges(self, builder):
@@ -83,9 +83,9 @@ class TestMessageCompression(TestPromptBuilder):
 [12:00:02] zigbee2mqtt/power_plug {"power":150}
 [12:00:03] zigbee2mqtt/power_plug {"power":200}
 [12:00:04] zigbee2mqtt/power_plug {"power":120}"""
-        
+
         compressed = builder._compress_messages(snapshot, None)
-        
+
         # Should contain count and possibly range
         assert "(4x)" in compressed
 
@@ -97,7 +97,7 @@ class TestParseMessageLine(TestPromptBuilder):
         """Test parsing a valid message line."""
         line = '[12:05:01] zigbee2mqtt/sensor {"temperature":22.5}'
         result = builder._parse_message_line(line)
-        
+
         assert result is not None
         timestamp, topic, payload = result
         assert timestamp == "12:05:01"
@@ -108,7 +108,7 @@ class TestParseMessageLine(TestPromptBuilder):
         """Test parsing a line without JSON payload."""
         line = '[12:05:01] zigbee2mqtt/sensor simple_value'
         result = builder._parse_message_line(line)
-        
+
         assert result is not None
         timestamp, topic, payload = result
         assert topic == "zigbee2mqtt/sensor simple_value"
@@ -118,14 +118,14 @@ class TestParseMessageLine(TestPromptBuilder):
         """Test parsing an invalid line returns None."""
         line = 'invalid line without timestamp'
         result = builder._parse_message_line(line)
-        
+
         assert result is None
 
     def test_parse_removes_noise_fields(self, builder):
         """Test that noise fields are removed during parsing."""
         line = '[12:05:01] zigbee2mqtt/sensor {"occupancy":true,"linkquality":150,"voltage":3.1}'
         result = builder._parse_message_line(line)
-        
+
         assert result is not None
         _, _, payload = result
         assert "occupancy" in payload
@@ -139,33 +139,33 @@ class TestRuleFiltering(TestPromptBuilder):
     def test_filter_rules_by_trigger_topic(self, builder, sample_learned_rules):
         """Test that rules are filtered by trigger topic."""
         trigger_topic = "zigbee2mqtt/kitchen_pir"
-        
+
         relevant = builder._filter_relevant_rules(
             sample_learned_rules, trigger_topic
         )
-        
+
         assert len(relevant) == 1
         assert relevant[0]["trigger"]["topic"] == trigger_topic
 
     def test_filter_rules_no_match_returns_all(self, builder, sample_learned_rules):
         """Test that when no match, all rules are returned (non-strict mode)."""
         trigger_topic = "zigbee2mqtt/nonexistent"
-        
+
         relevant = builder._filter_relevant_rules(
             sample_learned_rules, trigger_topic, strict=False
         )
-        
+
         # Should return all rules when no match found
         assert len(relevant) == len(sample_learned_rules["rules"])
 
     def test_filter_rules_strict_mode(self, builder, sample_learned_rules):
         """Test that strict mode returns empty when no match."""
         trigger_topic = "zigbee2mqtt/nonexistent"
-        
+
         relevant = builder._filter_relevant_rules(
             sample_learned_rules, trigger_topic, strict=True
         )
-        
+
         assert len(relevant) == 0
 
     def test_filter_excludes_disabled_rules(self, builder):
@@ -184,9 +184,9 @@ class TestRuleFiltering(TestPromptBuilder):
                 }
             ]
         }
-        
+
         relevant = builder._filter_relevant_rules(rules, None)
-        
+
         assert len(relevant) == 1
         assert relevant[0]["id"] == "enabled_rule"
 
@@ -197,11 +197,11 @@ class TestPatternFiltering(TestPromptBuilder):
     def test_filter_patterns_by_trigger_topic(self, builder, sample_pending_patterns):
         """Test that patterns are filtered by trigger topic."""
         trigger_topic = "zigbee2mqtt/hallway_pir"
-        
+
         relevant = builder._filter_relevant_patterns(
             sample_pending_patterns, trigger_topic
         )
-        
+
         assert len(relevant) == 1
         assert relevant[0]["trigger_topic"] == trigger_topic
 
@@ -224,12 +224,12 @@ class TestPatternFiltering(TestPromptBuilder):
                 }
             ]
         }
-        
+
         # With a non-matching trigger
         relevant = builder._filter_relevant_patterns(
             patterns, "zigbee2mqtt/nonexistent"
         )
-        
+
         # Should include the one with 2 observations
         assert len(relevant) == 1
         assert relevant[0]["trigger_topic"] == "zigbee2mqtt/other_pir"
@@ -241,7 +241,7 @@ class TestPromptBuilding(TestPromptBuilder):
     def test_build_includes_compact_rulebook(self, builder, mock_kb):
         """Test that build includes the compact rulebook."""
         prompt = builder.build("", mock_kb)
-        
+
         assert "## Core Rules" in prompt
         assert "Safety" in prompt
         assert "Pattern Learning" in prompt
@@ -251,16 +251,16 @@ class TestPromptBuilding(TestPromptBuilder):
         prompt = builder.build(
             "", mock_kb, trigger_reason="State field 'smoke' changed"
         )
-        
+
         assert "SAFETY ALERT" in prompt
 
     def test_build_includes_demo_instruction(self, config, mock_kb):
         """Test that demo mode instruction is included when enabled."""
         config.demo_mode = True
         builder = PromptBuilder(config)
-        
+
         prompt = builder.build("", mock_kb)
-        
+
         assert "DEMO MODE" in prompt
         assert "jokes/" in prompt
 
@@ -268,9 +268,9 @@ class TestPromptBuilding(TestPromptBuilder):
         """Test that demo mode instruction is included in compact build."""
         config.demo_mode = True
         builder = PromptBuilder(config)
-        
+
         prompt = builder.build_compact("", mock_kb)
-        
+
         assert "DEMO MODE" in prompt
         assert "jokes/" in prompt
 
@@ -278,15 +278,15 @@ class TestPromptBuilding(TestPromptBuilder):
         """Test that compact prompt is shorter than full prompt."""
         full_prompt = builder.build(sample_messages_snapshot, mock_kb)
         compact_prompt = builder.build_compact(sample_messages_snapshot, mock_kb)
-        
+
         assert len(compact_prompt) < len(full_prompt)
 
     def test_build_formats_rules_with_marker(self, builder, mock_kb):
         """Test that matching rules are marked with MATCHES."""
         trigger_topic = "zigbee2mqtt/kitchen_pir"
-        
+
         prompt = builder.build("", mock_kb, trigger_reason=f"topic: {trigger_topic}")
-        
+
         # The rule should be marked as matching
         assert "MATCHES" in prompt or "kitchen_pir" in prompt
 
@@ -299,7 +299,7 @@ class TestTriggerTopicExtraction(TestPromptBuilder):
         result = builder._extract_trigger_topics(
             [], "topic: zigbee2mqtt/hallway_pir"
         )
-        
+
         assert "zigbee2mqtt/hallway_pir" in result
 
     def test_extract_from_zigbee_pattern(self, builder):
@@ -307,7 +307,7 @@ class TestTriggerTopicExtraction(TestPromptBuilder):
         result = builder._extract_trigger_topics(
             [], "State changed on zigbee2mqtt/kitchen_pir sensor"
         )
-        
+
         assert "zigbee2mqtt/kitchen_pir" in result
 
     def test_extract_returns_none_for_no_match(self, builder):
@@ -315,7 +315,7 @@ class TestTriggerTopicExtraction(TestPromptBuilder):
         result = builder._extract_trigger_topics(
             [], "Manual trigger pressed"
         )
-        
+
         assert result == []
 
 
@@ -330,7 +330,7 @@ class TestFormatPayload(TestPromptBuilder):
     def test_format_payload_simple(self, builder):
         """Test formatting simple payload."""
         result = builder._format_payload({"state": "ON", "brightness": 100})
-        
+
         assert "state:" in result
         assert "ON" in result
         assert "brightness:" in result
@@ -346,7 +346,7 @@ class TestMessageStats:
             payload={"key": "value"},
             timestamp="12:00:00"
         )
-        
+
         assert stats.count == 1
         assert stats.first_seen is None
         assert stats.numeric_ranges == {}
@@ -361,7 +361,7 @@ class TestMessageStats:
             first_seen="12:00:00",
             numeric_ranges={"power": (100.0, 150.0)}
         )
-        
+
         assert stats.count == 5
         assert stats.first_seen == "12:00:00"
         assert stats.numeric_ranges["power"] == (100.0, 150.0)

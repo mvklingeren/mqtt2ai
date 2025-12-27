@@ -29,7 +29,7 @@ class Event:
 
 class EventBus:
     """Simple event bus for publishing and collecting events.
-    
+
     Events are stored in a list and can be queried by type.
     Subscribers can be registered to receive events in real-time.
     """
@@ -40,14 +40,14 @@ class EventBus:
 
     def publish(self, event_type: EventType, data: dict) -> None:
         """Publish an event to the bus.
-        
+
         Args:
             event_type: The type of event
             data: Event data dictionary
         """
         event = Event(type=event_type, data=data)
         self._events.append(event)
-        
+
         # Notify subscribers
         for callback in self._subscribers.get(event_type, []):
             try:
@@ -57,7 +57,7 @@ class EventBus:
 
     def subscribe(self, event_type: EventType, callback: Callable[[Event], None]) -> None:
         """Subscribe to events of a specific type.
-        
+
         Args:
             event_type: The type of event to subscribe to
             callback: Function to call when event is published
@@ -68,10 +68,10 @@ class EventBus:
 
     def get_events(self, event_type: Optional[EventType] = None) -> List[Event]:
         """Get all collected events, optionally filtered by type.
-        
+
         Args:
             event_type: If provided, only return events of this type
-            
+
         Returns:
             List of matching events
         """

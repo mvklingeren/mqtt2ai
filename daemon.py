@@ -13,6 +13,8 @@ import threading
 import time
 import logging
 import signal
+import fnmatch
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from collections import deque as Deque
@@ -30,10 +32,10 @@ import tools
 VERSION = "0.2"
 
 BANNER = r"""
-__  __  ___ _____ _____ ____    _    ___ 
+__  __  ___ _____ _____ ____    _    ___
  |  \/  |/ _ \_   _|_   _|___ \  / \  |_ _|
- | |\/| | | | || |   | |   __) |/ _ \  | | 
- | |  | | |_| || |   | |  / __// ___ \ | | 
+ | |\/| | | | || |   | |   __) |/ _ \  | |
+ | |  | | |_| || |   | |  / __// ___ \ | |
  |_|  |_|\__\_\|_|   |_| |_____/_/   \_\___|
 """
 
@@ -57,20 +59,17 @@ class RuntimeContext:
     mqtt_client: 'MqttClient'
     device_tracker: 'DeviceStateTracker'
 
-import fnmatch
-import re
-
 
 class DeviceStateTracker:
     """Tracks the last known state of devices matching a topic pattern.
-    
+
     This provides an in-memory cache of device states that can be used
     by the alert system to give the AI full context about available devices.
     """
-    
+
     def __init__(self, pattern: str = "zigbee2mqtt/*"):
         """Initialize the tracker with a topic pattern.
-        
+
         Args:
             pattern: Glob pattern for topics to track (e.g., "zigbee2mqtt/*")
         """
@@ -82,10 +81,10 @@ class DeviceStateTracker:
         self._states: dict[str, dict] = {}
         self._lock = threading.Lock()
         self._last_cleanup = time.time()
-    
+
     def should_track(self, topic: str) -> bool:
         """Check if a topic should be tracked.
-        
+
         Excludes:
         - /set and /get suffixes (commands, not state)
         - bridge/ topics (not device state)
@@ -95,17 +94,17 @@ class DeviceStateTracker:
         if "/bridge/" in topic:
             return False
         return bool(self._pattern_re.match(topic))
-    
+
     def update(self, topic: str, payload: str) -> None:
         """Update the state for a device topic.
-        
+
         Args:
             topic: The MQTT topic
             payload: The raw payload string (JSON expected)
         """
         if not self.should_track(topic):
             return
-        
+
         try:
             state = json.loads(payload)
             if isinstance(state, dict):
@@ -114,32 +113,32 @@ class DeviceStateTracker:
                     self._states[topic]['_updated'] = time.time()
         except json.JSONDecodeError:
             pass  # Ignore non-JSON payloads
-            
+
         # Periodic cleanup (chance based to avoid checking every message)
         if time.time() - self._last_cleanup > 3600:
             self.cleanup()
-    
+
     def get_all_states(self) -> dict[str, dict]:
         """Get a copy of all tracked device states.
-        
+
         Returns:
             Dict mapping topic -> last known state
         """
         with self._lock:
             return dict(self._states)
-    
+
     def get_state(self, topic: str) -> Optional[dict]:
         """Get the last known state for a specific topic.
-        
+
         Args:
             topic: The MQTT topic
-            
+
         Returns:
             The last known state dict, or None if not tracked
         """
         with self._lock:
             return self._states.get(topic)
-    
+
     def get_device_count(self) -> int:
         """Get the number of tracked devices."""
         with self._lock:
@@ -147,10 +146,10 @@ class DeviceStateTracker:
 
     def cleanup(self, max_age_seconds: float = 86400 * 7) -> int:
         """Remove stale devices that haven't updated in a long time.
-        
+
         Args:
             max_age_seconds: Max age in seconds (default: 7 days)
-            
+
         Returns:
             Number of removed devices
         """
@@ -162,13 +161,13 @@ class DeviceStateTracker:
                 last_updated = state.get('_updated', 0)
                 if now - last_updated > max_age_seconds:
                     to_remove.append(topic)
-            
+
             for topic in to_remove:
                 del self._states[topic]
                 removed += 1
-            
+
             self._last_cleanup = now
-            
+
         if removed > 0:
             logging.info("DeviceStateTracker cleanup: removed %d stale devices", removed)
         return removed
@@ -176,7 +175,7 @@ class DeviceStateTracker:
 
 class RuleEngine:
     """Executes learned rules directly without AI for matched triggers.
-    
+
     This provides fast, deterministic execution of fixed automation rules
     while reserving AI for anomaly detection and pattern learning.
     """
@@ -195,12 +194,12 @@ class RuleEngine:
         trigger_result: TriggerResult
     ) -> bool:
         """Check if any enabled rule matches and execute directly.
-        
+
         Args:
             topic: The MQTT topic that triggered
             payload_str: The raw payload string (JSON)
             trigger_result: The TriggerResult from TriggerAnalyzer
-            
+
         Returns:
             True if a rule was executed (handled), False otherwise
         """
@@ -245,7 +244,7 @@ class RuleEngine:
     ) -> bool:
         """Check if a rule matches the current trigger event."""
         trigger = rule.get("trigger", {})
-        
+
         # Check topic match
         if trigger.get("topic") != topic:
             return False
@@ -334,18 +333,26 @@ def print_banner(config: Config):
         model = config.codex_model
     elif provider == "openai-compatible":
         models = config.openai_models
-        model = f"{len(models)} models (round-robin)" if len(models) > 1 else models[0] if models else "none"
+        if len(models) > 1:
+            model = f"{len(models)} models (round-robin)"
+        elif models:
+            model = models[0]
+        else:
+            model = "none"
     else:
         model = "unknown"
 
     print(f"{cyan}{BANNER}{reset}")
     print(f"  {dim}v{VERSION}{reset}  {bold}AI:{reset} {yellow}{provider}{reset} / {model}")
-    
+
     # Show simulation mode if active
     if config.simulation_file:
         magenta = "\033[95m"
-        print(f"  {bold}{magenta}[SIMULATION MODE]{reset} {dim}{config.simulation_file}{reset}")
-    
+        print(
+            f"  {bold}{magenta}[SIMULATION MODE]{reset} "
+            f"{dim}{config.simulation_file}{reset}"
+        )
+
     print()
 
 
@@ -361,31 +368,25 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         self.config = config
         self.kb = KnowledgeBase(config)
         self.mqtt = MqttClient(config)
-        
+
         # Device state tracker for alert system context
         self.device_tracker = DeviceStateTracker(config.device_track_pattern)
-        
-        # Create runtime context for tools
-        self.context = RuntimeContext(
-            mqtt_client=self.mqtt,
-            device_tracker=self.device_tracker
-        )
-        
-        # Initialize AI agent with context
-        self.ai = AiAgent(config, device_tracker=self.device_tracker, context=self.context)
-        
+
+        # Initialize AI agent with event_bus
+        self.ai = AiAgent(config, event_bus=event_bus, device_tracker=self.device_tracker)
+
         # In simulation mode, disable cooldown to allow rapid triggering
         self.trigger_analyzer = TriggerAnalyzer(
             config.filtered_triggers_file,
             simulation_mode=bool(config.simulation_file)
         )
-        
+
         # Inject disable_new_rules setting into tools
         tools.set_disable_new_rules(config.disable_new_rules)
-        
+
         # Rule engine for direct execution of learned rules (no AI needed)
         self.rule_engine = RuleEngine(self.mqtt, self.kb)
-        
+
         self.messages_deque: Deque[str] = collections.deque(maxlen=config.max_messages)
         self.new_message_count = 0
         self.lock = threading.Lock()
@@ -403,7 +404,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         # Keyboard input thread for manual triggers
         self.keyboard_thread: Optional[threading.Thread] = None
         self.manual_trigger = False  # Flag to track if trigger was manual
-        
+
         # Trigger queue to decouple detection from main loop processing
         # Stores (trigger_result, timestamp) tuples
         self.trigger_queue: queue.Queue[tuple[TriggerResult, float]] = queue.Queue()
@@ -430,7 +431,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             "  - Numeric fields: %s",
             list(stats['config']['numeric_fields'].keys())
         )
-        
+
         # Log rule engine status
         rules_count = len(self.kb.learned_rules.get('rules', []))
         enabled_count = sum(
@@ -441,7 +442,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             "Rule engine initialized: %d rules (%d enabled for direct execution)",
             rules_count, enabled_count
         )
-        
+
         # Log device tracker status
         logging.info(
             "Device tracker initialized: pattern='%s'",
@@ -503,7 +504,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             while self.running and self.collector_thread.is_alive():
                 # Wait for trigger or timeout (1s)
                 self.ai_event.wait(timeout=1.0)
-                
+
                 # Clear event immediately so we can set it again
                 if self.ai_event.is_set():
                     self.ai_event.clear()
@@ -525,25 +526,30 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                     try:
                         trigger_result, _ = self.trigger_queue.get_nowait()
                         reason = "smart_trigger"
-                        
+
                         # Get snapshot for this trigger
-                        # Note: This gives current snapshot, which might include messages after trigger
+                        # Note: This gives current snapshot, which might include
+                        # messages after trigger
                         # For now this is acceptable as AI needs context
                         with self.lock:
                             snapshot = "\n".join(list(self.messages_deque))
-                        
+
                         if snapshot:
                             self._handle_ai_check(snapshot, reason, trigger_result)
                             triggers_processed += 1
                     except queue.Empty:
                         break
-                
+
                 # If no specific triggers but threshold/interval met
-                if triggers_processed == 0 and (should_check_count or should_check_time or self.manual_trigger):
+                should_check = (
+                    triggers_processed == 0
+                    and (should_check_count or should_check_time or self.manual_trigger)
+                )
+                if should_check:
                     reason = self._determine_trigger_reason(
                         False, should_check_count
                     )
-                    
+
                     with self.lock:
                         snapshot = "\n".join(list(self.messages_deque))
                         self.new_message_count = 0
@@ -578,12 +584,12 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         if self.config.simulation_file:
             logging.debug("Keyboard input disabled in simulation mode")
             return
-        
+
         # Check if stdin is a TTY (interactive terminal)
         if not sys.stdin.isatty():
             logging.debug("Keyboard input disabled (stdin is not a TTY)")
             return
-        
+
         logging.info("Press [Enter] to trigger an immediate AI check")
 
         while self.running:
@@ -686,7 +692,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
 
     def _wait_for_ai_completion(self, timeout: float = 60.0):
         """Wait for the AI worker to finish processing the current request.
-        
+
         Used in simulation mode to ensure deterministic pattern learning
         by waiting for each trigger to be fully processed before continuing.
         """
@@ -697,7 +703,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 logging.warning("AI completion wait timed out (queue not empty)")
                 return
             time.sleep(0.1)
-        
+
         # Then join the queue to ensure current task is done
         self.ai_queue.join()
 
@@ -781,20 +787,20 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 is_trigger_line = False
                 if trigger_result.should_trigger:
                     self._print_trigger(trigger_result, line)
-                    
+
                     # Try direct rule execution first (fast path, no AI)
                     # Reload knowledge base to get latest rules
                     self.kb.load_all()
                     rule_handled = self.rule_engine.check_and_execute(
                         current_topic, current_payload, trigger_result
                     )
-                    
+
                     if not rule_handled:
                         # No rule matched - queue for AI (pattern learning or anomaly)
                         # Push to trigger queue for processing by main loop
                         self.trigger_queue.put((trigger_result, time.time()))
                         self.ai_event.set()
-                    
+
                     is_trigger_line = True
 
                 # Verbose printing for non-trigger lines
@@ -873,7 +879,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 is_trigger_line = False
                 if trigger_result.should_trigger:
                     self._print_trigger(trigger_result, line)
-                    
+
                     # Publish TRIGGER_FIRED event for validation
                     event_bus.publish(EventType.TRIGGER_FIRED, {
                         "topic": current_topic,
@@ -881,14 +887,14 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                         "old_value": trigger_result.old_value,
                         "new_value": trigger_result.new_value
                     })
-                    
+
                     # Try direct rule execution first (fast path, no AI)
                     # Reload knowledge base to get latest rules
                     self.kb.load_all()
                     rule_handled = self.rule_engine.check_and_execute(
                         current_topic, current_payload, trigger_result
                     )
-                    
+
                     if not rule_handled:
                         # No rule matched - queue for AI (pattern learning or anomaly)
                         # Publish RULE_NOT_MATCHED event for validation
@@ -896,16 +902,16 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                             "trigger_topic": current_topic,
                             "trigger_field": trigger_result.field_name
                         })
-                        
+
                         # Push to trigger queue
                         self.trigger_queue.put((trigger_result, time.time()))
                         self.ai_event.set()
-                        
+
                         # In simulation mode, wait for AI to finish before continuing
                         # This ensures deterministic pattern learning
                         if not self.config.no_ai:
                             self._wait_for_ai_completion()
-                    
+
                     is_trigger_line = True
 
                 # Verbose printing for non-trigger lines
@@ -927,19 +933,19 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
 
             # Simulation complete - wait for any pending AI analysis
             logging.info("Simulation complete. Waiting for AI to finish processing...")
-            
+
             # Give AI time to process final messages
             time.sleep(2.0)
-            
+
             # Wait for AI queue to be empty
             if not self.config.no_ai:
                 self.ai_queue.join()
-            
+
             # Publish SIMULATION_COMPLETE event for validation
             event_bus.publish(EventType.SIMULATION_COMPLETE, {
                 "total_messages": len(self.messages_deque)
             })
-            
+
             logging.info("All AI processing complete. Shutting down...")
             self.running = False
 
@@ -952,7 +958,6 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
 
     def _compress_line(self, line: str) -> Optional[str]:
         """Compress a single MQTT message line by removing noise fields.
-
         Returns None if the line has no relevant fields after compression.
         """
         try:
