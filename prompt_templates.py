@@ -7,6 +7,11 @@ and other static text content used by the AI agent.
 # Compact rulebook - core rules only, no verbose documentation
 COMPACT_RULEBOOK = """## Core Rules
 
+### Response Format
+- If NO action is needed: respond with only "No action required" or similar brief statement
+- Do NOT explain why each function wasn't called
+- Keep non-action responses under 20 words
+
 ### CHECK SKIP PATTERNS FIRST
 If a trigger->action pair is in SKIP PATTERNS, do NOT call record_pattern_observation or create_rule.
 This saves tokens and prevents redundant operations.
