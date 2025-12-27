@@ -33,174 +33,6 @@ The AI has access to tools for publishing MQTT commands, creating/managing rules
 
 ---
 
-## Architecture
-
-```mermaid
-flowchart TB
-    subgraph External["External Systems"]
-        MQTT[("MQTT Broker")]
-        Z2M["Zigbee2MQTT"]
-        Devices["Smart Devices"]
-    end
-
-    subgraph Daemon["MQTT AI Daemon"]
-        direction TB
-
-        subgraph Collector["Collector Thread"]
-            MQTTClient["MQTT Client"]
-            MsgQueue["Message Queue"]
-        end
-
-        subgraph Processing["Message Processing"]
-            DeviceTracker["Device State Tracker"]
-            TriggerAnalyzer["Trigger Analyzer"]
-            RuleEngine["Rule Engine"]
-        end
-
-        subgraph AILayer["AI Layer"]
-            AIQueue["AI Queue"]
-            AIWorker["AI Worker Thread"]
-            AIAgent["AI Agent"]
-            PromptBuilder["Prompt Builder"]
-            AlertHandler["Alert Handler"]
-        end
-
-        subgraph Knowledge["Knowledge Base"]
-            LearnedRules[("learned_rules.json")]
-            PendingPatterns[("pending_patterns.json")]
-            Rulebook[("rulebook.md")]
-        end
-
-        EventBus["Event Bus"]
-    end
-
-    subgraph AIProviders["AI Providers"]
-        OpenAI["OpenAI-Compatible"]
-        Gemini["Google Gemini"]
-        Claude["Anthropic Claude"]
-    end
-
-    subgraph OpenAIAPI["OpenAI-Compatible API Flow"]
-        direction LR
-        APIEndpoint["API Endpoint"]
-        ToolCalls["Tool Calls"]
-    end
-
-    Devices <--> Z2M
-    Z2M <--> MQTT
-
-    MQTT --> MQTTClient
-    MQTTClient --> MsgQueue
-    MsgQueue --> DeviceTracker
-    DeviceTracker --> TriggerAnalyzer
-    TriggerAnalyzer --> RuleEngine
-
-    RuleEngine -->|"Rule Matched"| MQTT
-    RuleEngine -->|"No Rule"| AIQueue
-
-    AIQueue --> AIWorker
-    AIWorker --> AIAgent
-    AIAgent --> PromptBuilder
-    PromptBuilder --> Knowledge
-    AIAgent --> AlertHandler
-
-    AIAgent --> OpenAI
-    AIAgent --> Gemini
-    AIAgent --> Claude
-
-    OpenAI --> APIEndpoint
-    APIEndpoint --> ToolCalls
-    ToolCalls -->|"send_mqtt_message"| MQTT
-    ToolCalls -->|"create_rule"| LearnedRules
-    ToolCalls -->|"record_pattern"| PendingPatterns
-    ToolCalls -->|"raise_alert"| AlertHandler
-
-    RuleEngine -.-> EventBus
-    AIAgent -.-> EventBus
-    TriggerAnalyzer -.-> EventBus
-```
-
----
-
-## Message Flow
-
-```mermaid
-sequenceDiagram
-    participant D as Smart Device
-    participant M as MQTT Broker
-    participant C as Collector Thread
-    participant T as Trigger Analyzer
-    participant R as Rule Engine
-    participant A as AI Agent
-    participant API as OpenAI API
-    participant K as Knowledge Base
-
-    D->>M: Publish state change
-    M->>C: Deliver message
-    C->>C: Update Device State Tracker
-    C->>T: Analyze for triggers
-
-    alt Smart Trigger Detected
-        T->>R: Check learned rules
-
-        alt Rule Exists - Fast Path
-            R->>M: Execute action directly
-            R->>R: Publish RULE_EXECUTED event
-        else No Matching Rule
-            R->>A: Queue for AI analysis
-            A->>A: Build optimized prompt
-            A->>API: Send chat completion request
-
-            loop Tool Calling - max 10 iterations
-                API->>A: Return tool_calls
-                A->>A: Execute tool
-
-                alt record_pattern_observation
-                    A->>K: Store pattern - 1/3 observations
-                else create_rule - after 3+ observations
-                    A->>K: Save new rule
-                else send_mqtt_message
-                    A->>M: Publish MQTT action
-                end
-
-                A->>API: Return tool result
-            end
-
-            API->>A: Final response
-        end
-    end
-```
-
----
-
-## Tool System
-
-```mermaid
-flowchart LR
-    subgraph Tools["Available AI Tools"]
-        send["send_mqtt_message"]
-        record["record_pattern_observation"]
-        create["create_rule"]
-        reject["reject_pattern"]
-        undo["report_undo"]
-        toggle["toggle_rule"]
-        getRules["get_learned_rules"]
-        getPatterns["get_pending_patterns"]
-        alert["raise_alert"]
-    end
-
-    AI["AI Agent"] --> Tools
-
-    send --> MQTT["MQTT Broker"]
-    record --> Pending["pending_patterns.json"]
-    create --> Rules["learned_rules.json"]
-    reject --> Rejected["rejected_patterns.json"]
-    toggle --> Rules
-    alert --> AlertHandler["Alert Handler"]
-```
-
----
-
 ## How It Works
 
 1. **Message Collection**: The daemon subscribes to MQTT topics and collects messages from smart home devices.
@@ -218,103 +50,6 @@ flowchart LR
 5. **Pattern Learning**: The system learns from repeated user behaviors. After observing the same trigger→action pattern 3+ times, it creates an automation rule.
 
 6. **Alert System**: Security-related events can trigger alerts with severity-based responses (logging, notifications, or AI-driven defensive actions).
-
----
-
-## Pattern Learning Flow
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant Sensor as PIR Sensor
-    participant MQTT
-    participant Daemon
-    participant AI as AI Agent
-    participant Rules as learned_rules.json
-    participant Patterns as pending_patterns.json
-
-    Note over User,Patterns: Pattern Detection - 3x required
-    
-    User->>Sensor: Walks into room
-    Sensor->>MQTT: occupancy: true
-    MQTT->>Daemon: Message received
-    
-    User->>MQTT: Turns on light manually
-    MQTT->>Daemon: light/set: ON
-    
-    Daemon->>AI: Analyze messages
-    AI->>AI: Detect pattern: PIR to Light - 5s delay
-    AI->>Patterns: record_pattern_observation - Save 1/3
-    
-    Note over User,Patterns: After 3 observations...
-    
-    AI->>Rules: create_rule - Save as automation
-    AI->>Patterns: Clear pending pattern
-    
-    Note over User,Patterns: Rule Execution - future triggers
-    
-    Sensor->>MQTT: occupancy: true
-    MQTT->>Daemon: Smart trigger!
-    Daemon->>MQTT: Automatic light on via Fast Path
-```
-
----
-
-## Undo Detection and Rejected Patterns
-
-The system can detect when users don't want a particular automation and automatically reject it.
-
-### How Undo Detection Works
-
-When the AI executes a learned rule, the action appears in the MQTT message buffer. If the user "undoes" the action within ~30 seconds (e.g., turns OFF a light that was just auto-turned ON), the AI detects this pattern:
-
-```mermaid
-sequenceDiagram
-    participant AI as AI Agent
-    participant MQTT
-    participant User
-
-    Note over AI,User: AI executes automation
-    AI->>MQTT: send_mqtt_message - light ON
-    
-    Note over AI,User: User undoes within 30s
-    User->>MQTT: light/set: OFF
-    
-    Note over AI,User: Next AI analysis
-    AI->>AI: Detect undo in messages
-    AI->>AI: report_undo - undo_count++
-    
-    Note over AI,User: After 3 undos
-    AI->>AI: reject_pattern
-```
-
-### Rejected Patterns
-
-Patterns can be rejected in two ways:
-
-1. **Automatic**: After 3 user undos, the AI calls `reject_pattern()` 
-2. **Manual**: Directly add to `rejected_patterns.json` or call `reject_pattern()` tool
-
-Rejected patterns will:
-- Never be tracked as pending patterns
-- Never be created as new rules
-- Have any existing rules automatically deleted
-
-### Example Rejected Pattern
-
-```json
-{
-  "patterns": [
-    {
-      "trigger_topic": "zigbee2mqtt/pir_ground_floor",
-      "trigger_field": "occupancy",
-      "action_topic": "zigbee2mqtt/light_first_floor/set",
-      "reason": "User undid automation 3 times - coincidental pattern",
-      "rejected_at": "2025-12-20T21:00:00"
-    }
-  ]
-}
-```
 
 ---
 
@@ -538,6 +273,271 @@ The AI ignores minor fluctuations:
     "last_triggered": "2025-12-20T10:30:00"
   },
   "enabled": true
+}
+```
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph External["External Systems"]
+        MQTT[("MQTT Broker")]
+        Z2M["Zigbee2MQTT"]
+        Devices["Smart Devices"]
+    end
+
+    subgraph Daemon["MQTT AI Daemon"]
+        direction TB
+
+        subgraph Collector["Collector Thread"]
+            MQTTClient["MQTT Client"]
+            MsgQueue["Message Queue"]
+        end
+
+        subgraph Processing["Message Processing"]
+            DeviceTracker["Device State Tracker"]
+            TriggerAnalyzer["Trigger Analyzer"]
+            RuleEngine["Rule Engine"]
+        end
+
+        subgraph AILayer["AI Layer"]
+            AIQueue["AI Queue"]
+            AIWorker["AI Worker Thread"]
+            AIAgent["AI Agent"]
+            PromptBuilder["Prompt Builder"]
+            AlertHandler["Alert Handler"]
+        end
+
+        subgraph Knowledge["Knowledge Base"]
+            LearnedRules[("learned_rules.json")]
+            PendingPatterns[("pending_patterns.json")]
+            Rulebook[("rulebook.md")]
+        end
+
+        EventBus["Event Bus"]
+    end
+
+    subgraph AIProviders["AI Providers"]
+        OpenAI["OpenAI-Compatible"]
+        Gemini["Google Gemini"]
+        Claude["Anthropic Claude"]
+    end
+
+    subgraph OpenAIAPI["OpenAI-Compatible API Flow"]
+        direction LR
+        APIEndpoint["API Endpoint"]
+        ToolCalls["Tool Calls"]
+    end
+
+    Devices <--> Z2M
+    Z2M <--> MQTT
+
+    MQTT --> MQTTClient
+    MQTTClient --> MsgQueue
+    MsgQueue --> DeviceTracker
+    DeviceTracker --> TriggerAnalyzer
+    TriggerAnalyzer --> RuleEngine
+
+    RuleEngine -->|"Rule Matched"| MQTT
+    RuleEngine -->|"No Rule"| AIQueue
+
+    AIQueue --> AIWorker
+    AIWorker --> AIAgent
+    AIAgent --> PromptBuilder
+    PromptBuilder --> Knowledge
+    AIAgent --> AlertHandler
+
+    AIAgent --> OpenAI
+    AIAgent --> Gemini
+    AIAgent --> Claude
+
+    OpenAI --> APIEndpoint
+    APIEndpoint --> ToolCalls
+    ToolCalls -->|"send_mqtt_message"| MQTT
+    ToolCalls -->|"create_rule"| LearnedRules
+    ToolCalls -->|"record_pattern"| PendingPatterns
+    ToolCalls -->|"raise_alert"| AlertHandler
+
+    RuleEngine -.-> EventBus
+    AIAgent -.-> EventBus
+    TriggerAnalyzer -.-> EventBus
+```
+
+---
+
+## Message Flow
+
+```mermaid
+sequenceDiagram
+    participant D as Smart Device
+    participant M as MQTT Broker
+    participant C as Collector Thread
+    participant T as Trigger Analyzer
+    participant R as Rule Engine
+    participant A as AI Agent
+    participant API as OpenAI API
+    participant K as Knowledge Base
+
+    D->>M: Publish state change
+    M->>C: Deliver message
+    C->>C: Update Device State Tracker
+    C->>T: Analyze for triggers
+
+    alt Smart Trigger Detected
+        T->>R: Check learned rules
+
+        alt Rule Exists - Fast Path
+            R->>M: Execute action directly
+            R->>R: Publish RULE_EXECUTED event
+        else No Matching Rule
+            R->>A: Queue for AI analysis
+            A->>A: Build optimized prompt
+            A->>API: Send chat completion request
+
+            loop Tool Calling - max 10 iterations
+                API->>A: Return tool_calls
+                A->>A: Execute tool
+
+                alt record_pattern_observation
+                    A->>K: Store pattern - 1/3 observations
+                else create_rule - after 3+ observations
+                    A->>K: Save new rule
+                else send_mqtt_message
+                    A->>M: Publish MQTT action
+                end
+
+                A->>API: Return tool result
+            end
+
+            API->>A: Final response
+        end
+    end
+```
+
+---
+
+## Pattern Learning Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Sensor as PIR Sensor
+    participant MQTT
+    participant Daemon
+    participant AI as AI Agent
+    participant Rules as learned_rules.json
+    participant Patterns as pending_patterns.json
+
+    Note over User,Patterns: Pattern Detection - 3x required
+    
+    User->>Sensor: Walks into room
+    Sensor->>MQTT: occupancy: true
+    MQTT->>Daemon: Message received
+    
+    User->>MQTT: Turns on light manually
+    MQTT->>Daemon: light/set: ON
+    
+    Daemon->>AI: Analyze messages
+    AI->>AI: Detect pattern: PIR to Light - 5s delay
+    AI->>Patterns: record_pattern_observation - Save 1/3
+    
+    Note over User,Patterns: After 3 observations...
+    
+    AI->>Rules: create_rule - Save as automation
+    AI->>Patterns: Clear pending pattern
+    
+    Note over User,Patterns: Rule Execution - future triggers
+    
+    Sensor->>MQTT: occupancy: true
+    MQTT->>Daemon: Smart trigger!
+    Daemon->>MQTT: Automatic light on via Fast Path
+```
+
+---
+
+## Tool System
+
+```mermaid
+flowchart LR
+    subgraph Tools["Available AI Tools"]
+        send["send_mqtt_message"]
+        record["record_pattern_observation"]
+        create["create_rule"]
+        reject["reject_pattern"]
+        undo["report_undo"]
+        toggle["toggle_rule"]
+        getRules["get_learned_rules"]
+        getPatterns["get_pending_patterns"]
+        alert["raise_alert"]
+    end
+
+    AI["AI Agent"] --> Tools
+
+    send --> MQTT["MQTT Broker"]
+    record --> Pending["pending_patterns.json"]
+    create --> Rules["learned_rules.json"]
+    reject --> Rejected["rejected_patterns.json"]
+    toggle --> Rules
+    alert --> AlertHandler["Alert Handler"]
+```
+
+---
+
+## Undo Detection and Rejected Patterns
+
+The system can detect when users don't want a particular automation and automatically reject it.
+
+### How Undo Detection Works
+
+When the AI executes a learned rule, the action appears in the MQTT message buffer. If the user "undoes" the action within ~30 seconds (e.g., turns OFF a light that was just auto-turned ON), the AI detects this pattern:
+
+```mermaid
+sequenceDiagram
+    participant AI as AI Agent
+    participant MQTT
+    participant User
+
+    Note over AI,User: AI executes automation
+    AI->>MQTT: send_mqtt_message - light ON
+    
+    Note over AI,User: User undoes within 30s
+    User->>MQTT: light/set: OFF
+    
+    Note over AI,User: Next AI analysis
+    AI->>AI: Detect undo in messages
+    AI->>AI: report_undo - undo_count++
+    
+    Note over AI,User: After 3 undos
+    AI->>AI: reject_pattern
+```
+
+### Rejected Patterns
+
+Patterns can be rejected in two ways:
+
+1. **Automatic**: After 3 user undos, the AI calls `reject_pattern()` 
+2. **Manual**: Directly add to `rejected_patterns.json` or call `reject_pattern()` tool
+
+Rejected patterns will:
+- Never be tracked as pending patterns
+- Never be created as new rules
+- Have any existing rules automatically deleted
+
+### Example Rejected Pattern
+
+```json
+{
+  "patterns": [
+    {
+      "trigger_topic": "zigbee2mqtt/pir_ground_floor",
+      "trigger_field": "occupancy",
+      "action_topic": "zigbee2mqtt/light_first_floor/set",
+      "reason": "User undid automation 3 times - coincidental pattern",
+      "rejected_at": "2025-12-20T21:00:00"
+    }
+  ]
 }
 ```
 
