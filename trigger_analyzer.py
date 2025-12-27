@@ -26,6 +26,7 @@ class TriggerResult:
     field_name: Optional[str] = None
     old_value: Optional[Any] = None
     new_value: Optional[Any] = None
+    topic: Optional[str] = None  # The MQTT topic that triggered
 
     def __str__(self):
         if self.should_trigger:
@@ -65,10 +66,19 @@ class TriggerAnalyzer:
     - Gradual drift in numeric values over time (e.g., temperature slowly rising)
     """
 
-    def __init__(self, config_path: str = "filtered_triggers.json"):
-        """Initialize the analyzer with configuration from a JSON file."""
+    def __init__(
+        self, config_path: str = "filtered_triggers.json",
+        simulation_mode: bool = False
+    ):
+        """Initialize the analyzer with configuration from a JSON file.
+
+        Args:
+            config_path: Path to the trigger configuration JSON file
+            simulation_mode: If True, disables cooldown to allow rapid triggering
+        """
         self.config = self._load_config(config_path)
         self.topic_states: Dict[str, TopicState] = {}
+        self.simulation_mode = simulation_mode
 
     def _load_config(self, config_path: str) -> dict:
         """Load configuration from JSON file with sensible defaults."""
@@ -110,7 +120,15 @@ class TriggerAnalyzer:
         return self.topic_states[topic]
 
     def _is_on_cooldown(self, topic_state: TopicState) -> bool:
-        """Check if the topic is still in cooldown period."""
+        """Check if the topic is still in cooldown period.
+
+        In simulation mode, cooldown is disabled to allow rapid triggering
+        for testing pattern learning.
+        """
+        # Disable cooldown in simulation mode
+        if self.simulation_mode:
+            return False
+
         if topic_state.last_trigger_time == 0:
             return False
         elapsed = time.time() - topic_state.last_trigger_time
@@ -270,16 +288,18 @@ class TriggerAnalyzer:
         result = self._check_state_fields(topic_state, payload)
         if result and result.should_trigger:
             topic_state.last_trigger_time = time.time()
+            result.topic = topic  # Include the topic for deduplication
             return result
 
         # Check numeric fields for significant changes
         result = self._check_numeric_fields(topic_state, payload)
         if result and result.should_trigger:
             topic_state.last_trigger_time = time.time()
+            result.topic = topic  # Include the topic for deduplication
             return result
 
         return TriggerResult(
-            should_trigger=False, reason="No significant changes detected"
+            should_trigger=False, reason="No significant changes detected", topic=topic
         )
 
     def get_stats(self) -> dict:

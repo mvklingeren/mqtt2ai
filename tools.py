@@ -1,66 +1,73 @@
-#!/usr/bin/env python3
-"""
-MCP Server exposing MQTT tools for AI CLI agents (Gemini, Claude, Codex).
+"""Tool implementations for AI function calling.
 
-This server provides the send_mqtt_message tool that allows the AI
-to publish messages directly to MQTT topics, as well as tools for
-managing learned automation rules.
+This module provides pure tool functions that can be called by any AI provider
+(OpenAI, Gemini, Claude) through their function calling / tool use APIs.
+The MqttClient dependency can be injected via RuntimeContext.
 """
 
 import json
-import subprocess
 from datetime import datetime
-from mcp.server.fastmcp import FastMCP
+from typing import TYPE_CHECKING, Optional
 
-from config import Config
 from utils import load_json_file, save_json_file
 
-# MQTT Configuration
-MQTT_HOST = "192.168.1.245"
-MQTT_PORT = "1883"
+if TYPE_CHECKING:
+    from context import RuntimeContext
 
 # Rules files
 LEARNED_RULES_FILE = "learned_rules.json"
 PENDING_PATTERNS_FILE = "pending_patterns.json"
 REJECTED_PATTERNS_FILE = "rejected_patterns.json"
 
-# Initialize MCP server
-mcp = FastMCP("mqtt-tools")
+# Module-level config for disable_new_rules setting
+# TODO: Move this to RuntimeContext or Config
+_DISABLE_NEW_RULES = False
 
-# Load config
-config = Config()
+def set_disable_new_rules(disable: bool) -> None:
+    """Set whether new rules should be disabled by default.
 
-
-@mcp.tool()
-def send_mqtt_message(topic: str, payload: str) -> str:
+    Args:
+        disable: If True, new rules are created in disabled state
     """
-    Send a message to an MQTT topic.
+    global _DISABLE_NEW_RULES
+    _DISABLE_NEW_RULES = disable
+
+
+def _get_mqtt_client(context: Optional['RuntimeContext'] = None):
+    """Get the MQTT client from context.
+
+    Args:
+        context: Optional RuntimeContext with mqtt_client
+
+    Returns:
+        The MQTT client, or None if not available
+    """
+    if context and context.mqtt_client:
+        return context.mqtt_client
+    return None
+
+
+def send_mqtt_message(
+    topic: str,
+    payload: str,
+    context: Optional['RuntimeContext'] = None
+) -> str:
+    """Send a message to an MQTT topic.
 
     Args:
         topic: The MQTT topic to publish to (e.g., 'alert/power')
         payload: The message payload, typically a JSON string
+        context: Optional RuntimeContext for dependency injection
 
     Returns:
         A confirmation message indicating success or failure
     """
-    try:
-        subprocess.run(
-            [
-                "mosquitto_pub", "-h", MQTT_HOST, "-p", MQTT_PORT,
-                "-t", topic, "-m", payload
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+    client = _get_mqtt_client(context)
+    if client and client.publish(topic, payload):
         return f"Successfully sent message to topic '{topic}'"
-    except FileNotFoundError:
-        return "Error: 'mosquitto_pub' command not found. Please install mosquitto-clients."
-    except subprocess.CalledProcessError as e:
-        return f"Error sending MQTT message: {e.stderr}"
+    return "Error: Failed to send MQTT message. Check connection to broker."
 
 
-@mcp.tool()
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
 def create_rule(
     rule_id: str,
@@ -72,8 +79,7 @@ def create_rule(
     avg_delay_seconds: float,
     tolerance_seconds: float
 ) -> str:
-    """
-    Create or update an automation rule based on learned patterns.
+    """Create or update an automation rule based on learned patterns.
 
     This tool is used by the AI to formalize patterns it has detected after
     observing the same trigger->action sequence multiple times.
@@ -135,7 +141,7 @@ def create_rule(
             "occurrences": 3,
             "last_triggered": datetime.now().isoformat()
         },
-        "enabled": not config.disable_new_rules
+        "enabled": not _DISABLE_NEW_RULES
     }
 
     # Check if this pattern has been rejected
@@ -150,6 +156,17 @@ def create_rule(
         existing_rule_by_id if existing_rule_by_id is not None
         else existing_rule_by_logic
     )
+
+    # If rule already exists with same trigger+action, don't update unnecessarily
+    if existing_index is not None:
+        existing_rule = rules_data["rules"][existing_index]
+        # Check if the rule is essentially the same (same trigger value)
+        if existing_rule.get("trigger", {}).get("value") == parsed_trigger_value:
+            return (
+                f"Rule '{existing_rule.get('id', rule_id)}' already exists for "
+                f"{trigger_topic}[{trigger_field}={trigger_value}] -> {action_topic}. "
+                "No update needed."
+            )
 
     if existing_index is not None:
         # Update existing rule (increment occurrences if updating)
@@ -232,10 +249,8 @@ def _add_rejected_pattern(
     save_json_file(REJECTED_PATTERNS_FILE, rejected_data)
 
 
-@mcp.tool()
 def get_learned_rules() -> str:
-    """
-    Get all learned automation rules.
+    """Get all learned automation rules.
 
     Returns:
         JSON string containing all learned rules
@@ -244,15 +259,27 @@ def get_learned_rules() -> str:
     return json.dumps(rules_data, indent=2)
 
 
-@mcp.tool()
+def _rule_exists_for_pattern(
+    trigger_topic: str, trigger_field: str, action_topic: str
+) -> bool:
+    """Check if a rule already exists for this trigger->action pattern."""
+    rules_data = load_json_file(LEARNED_RULES_FILE, {"rules": []})
+
+    for rule in rules_data["rules"]:
+        if (rule.get("trigger", {}).get("topic") == trigger_topic and
+                rule.get("trigger", {}).get("field") == trigger_field and
+                rule.get("action", {}).get("topic") == action_topic):
+            return True
+    return False
+
+
 def record_pattern_observation(
     trigger_topic: str,
     trigger_field: str,
     action_topic: str,
     delay_seconds: float
 ) -> str:
-    """
-    Record an observation of a potential trigger->action pattern.
+    """Record an observation of a potential trigger->action pattern.
 
     The AI should call this when it detects a user manually performing an action
     after a trigger event. After 3 observations, the AI should use create_rule
@@ -267,6 +294,13 @@ def record_pattern_observation(
     Returns:
         Status message indicating observation count
     """
+    # Check if a rule already exists for this pattern - don't re-learn
+    if _rule_exists_for_pattern(trigger_topic, trigger_field, action_topic):
+        return (
+            f"Rule already exists for {trigger_topic}[{trigger_field}] -> "
+            f"{action_topic}. No need to re-learn this pattern."
+        )
+
     # Check if this pattern has been rejected - don't track it
     if _is_pattern_rejected(trigger_topic, trigger_field, action_topic):
         return (
@@ -314,10 +348,8 @@ def record_pattern_observation(
     return f"Pattern observation recorded ({count}/3 needed to create rule)"
 
 
-@mcp.tool()
 def get_pending_patterns() -> str:
-    """
-    Get all pending patterns that are being tracked but haven't become rules yet.
+    """Get all pending patterns that are being tracked but haven't become rules yet.
 
     Returns:
         JSON string containing all pending patterns and their observations
@@ -326,10 +358,8 @@ def get_pending_patterns() -> str:
     return json.dumps(patterns_data, indent=2)
 
 
-@mcp.tool()
 def delete_rule(rule_id: str) -> str:
-    """
-    Delete a learned automation rule.
+    """Delete a learned automation rule.
 
     Args:
         rule_id: The ID of the rule to delete
@@ -348,10 +378,8 @@ def delete_rule(rule_id: str) -> str:
     return f"Rule '{rule_id}' not found"
 
 
-@mcp.tool()
 def toggle_rule(rule_id: str, enabled: bool) -> str:
-    """
-    Enable or disable a learned automation rule.
+    """Enable or disable a learned automation rule.
 
     Args:
         rule_id: The ID of the rule to toggle
@@ -372,10 +400,8 @@ def toggle_rule(rule_id: str, enabled: bool) -> str:
     return f"Rule '{rule_id}' not found"
 
 
-@mcp.tool()
 def clear_pending_patterns() -> str:
-    """
-    Clear all pending pattern observations.
+    """Clear all pending pattern observations.
 
     Use this to reset pattern learning when observations are stale or incorrect.
 
@@ -386,15 +412,13 @@ def clear_pending_patterns() -> str:
     return "All pending patterns cleared"
 
 
-@mcp.tool()
 def reject_pattern(
     trigger_topic: str,
     trigger_field: str,
     action_topic: str,
     reason: str = ""
 ) -> str:
-    """
-    Reject a pattern to prevent it from being learned or re-enabled.
+    """Reject a pattern to prevent it from being learned or re-enabled.
 
     Use this when a pattern is coincidental (e.g., walking past a PIR downstairs
     before going upstairs and turning on a light there - not a real automation).
@@ -443,10 +467,8 @@ def reject_pattern(
     return result
 
 
-@mcp.tool()
 def get_rejected_patterns() -> str:
-    """
-    Get all rejected patterns that will never be learned.
+    """Get all rejected patterns that will never be learned.
 
     Returns:
         JSON string containing all rejected patterns
@@ -455,14 +477,12 @@ def get_rejected_patterns() -> str:
     return json.dumps(rejected_data, indent=2)
 
 
-@mcp.tool()
 def remove_rejected_pattern(
     trigger_topic: str,
     trigger_field: str,
     action_topic: str
 ) -> str:
-    """
-    Remove a pattern from the rejected list, allowing it to be learned again.
+    """Remove a pattern from the rejected list, allowing it to be learned again.
 
     Args:
         trigger_topic: The MQTT trigger topic
@@ -491,10 +511,8 @@ def remove_rejected_pattern(
     return "Pattern not found in rejected list."
 
 
-@mcp.tool()
 def report_undo(rule_id: str) -> str:
-    """
-    Report that a user undid an automated action.
+    """Report that a user undid an automated action.
 
     Call this when you detect that a user reversed your automated action
     (e.g., you turned a light ON, user turned it OFF within 30 seconds).
@@ -524,7 +542,3 @@ def report_undo(rule_id: str) -> str:
             return f"Undo count for '{rule_id}' is now {count}/3"
 
     return f"Rule '{rule_id}' not found"
-
-
-if __name__ == "__main__":
-    mcp.run()

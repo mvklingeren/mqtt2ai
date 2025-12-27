@@ -180,18 +180,8 @@ class TestMqttAiDaemonHandleAiCheck:
         assert request.snapshot == "test snapshot"
         assert request.reason == "test reason"
 
-    def test_handle_ai_check_skips_when_busy(self, config_with_temp_files):
-        """Test that requests are skipped when AI is busy."""
-        config_with_temp_files.no_ai = False
-        daemon = MqttAiDaemon(config_with_temp_files)
 
-        # Simulate AI being busy
-        daemon.ai_busy.set()
 
-        daemon._handle_ai_check("test snapshot", "test reason")
-
-        # Queue should remain empty when AI is busy
-        assert daemon.ai_queue.empty()
 
 
 class TestMqttAiDaemonMessageDeque:

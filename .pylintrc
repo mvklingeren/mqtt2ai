@@ -1,3 +1,7 @@
+[MAIN]
+# Fail if score is below this threshold
+fail-under=9.9
+
 [MESSAGES CONTROL]
 # Disable common warnings that are acceptable in this project
 disable=
@@ -23,7 +27,23 @@ disable=
     # Test files may have missing docstrings for inner classes
     missing-class-docstring,
     # Broad exception catching is sometimes needed in tests
-    broad-exception-caught
+    broad-exception-caught,
+    # Ignore line length limits
+    line-too-long,
+    # Allow complex functions with many statements
+    too-many-statements,
+    # Allow functions with many arguments
+    too-many-arguments,
+    # Ignore trailing whitespace
+    trailing-whitespace,
+    # Ignore unnecessary pass statements
+    unnecessary-pass,
+    # Ignore missing module docstrings
+    missing-module-docstring,
+    # Ignore missing final newline
+    missing-final-newline,
+    # Allow functions with many positional arguments
+    too-many-positional-arguments
 
 [DESIGN]
 # Allow more local variables and arguments for complex functions

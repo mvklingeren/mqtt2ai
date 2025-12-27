@@ -1,5 +1,5 @@
 {
-  "cooldown_seconds": 5,
+  "cooldown_seconds": 15,
   "baseline_window_seconds": 600,
   "state_fields": ["contact", "smoke", "occupancy", "water_leak", "tamper", "motion", "state", "action"],
   "numeric_fields": {

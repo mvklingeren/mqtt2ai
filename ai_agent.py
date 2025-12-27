@@ -1,16 +1,41 @@
 """AI Agent module for the MQTT AI Daemon.
 
-This module handles interaction with AI CLI tools (Gemini, Claude, or Codex)
-for analyzing MQTT messages and making automation decisions.
+This module handles interaction with AI providers (OpenAI-compatible, Gemini, Claude)
+using their native Python SDKs with function calling for analyzing MQTT
+messages and making automation decisions.
 """
-import subprocess
-import shutil
 import json
 import logging
+import time
+import os
+import hashlib
+import threading
 from datetime import datetime
+from typing import Optional, TYPE_CHECKING
+
+# Import tools module directly (no circular import anymore)
+import tools
+from tool_definitions import OPENAI_TOOLS, OPENAI_TOOLS_MINIMAL
+from ai_providers.openai_provider import OpenAiProvider
+from ai_providers.gemini_provider import GeminiProvider
+from ai_providers.claude_provider import ClaudeProvider
+from alert_handler import AlertHandler
+from event_bus import event_bus, EventType
+from utils import write_debug_output
+
 
 from config import Config
 from knowledge_base import KnowledgeBase
+from prompt_builder import PromptBuilder
+
+if TYPE_CHECKING:
+    from daemon import DeviceStateTracker
+
+
+
+
+
+
 
 
 def timestamp() -> str:
@@ -19,67 +44,49 @@ def timestamp() -> str:
 
 
 class AiAgent:
-    """Handles interaction with AI CLI tools (Gemini, Claude, or Codex)."""
+    """Handles interaction with AI providers via their Python SDKs."""
 
-    # Fields to REMOVE from payloads (known noise, not useful for patterns)
-    # Everything else is kept by default
-    REMOVE_FIELDS = {
-        # Zigbee device metadata (noise)
-        "linkquality", "voltage", "energy",
-        "update", "update_available",
-        # Zigbee device settings (rarely change, not triggers)
-        "child_lock", "countdown", "indicator_mode", "power_outage_memory",
-        # Ring camera/device noise
-        "timestamp", "type", "wirelessNetwork", "wirelessSignal",
-        "firmwareStatus", "lastUpdate", "stream_Source", "still_Image_URL",
-        # Version info
-        "installed_version", "latest_version",
-        # Tasmota device noise
-        "Time", "Uptime", "UptimeSec", "Vcc", "Heap",
-        "SleepMode", "Sleep", "LoadAvg", "MqttCount",
-        "Hostname", "IPAddress",
-    }
+    # Fields to remove from MQTT payloads to save tokens
+    REMOVE_FIELDS = [
+        "linkquality", "update", "update_available", "voltage", "battery",
+        "action_transaction", "action_group", "target_temperature_type"
+    ]
 
-    def __init__(self, config: Config):
+    def __init__(
+        self,
+        config: Config,
+        event_bus: 'EventBus',
+        device_tracker: Optional['DeviceStateTracker'] = None,
+    ):
         self.config = config
+        self.event_bus = event_bus
+        self.device_tracker = device_tracker
+        self.prompt_builder = PromptBuilder(config)
+        self.alert_handler = AlertHandler(config, self, device_tracker)
+        self.ai_provider_instance = self._initialize_ai_provider()
 
-    def _get_cli_command(self) -> tuple[str, list[str]]:
-        """Return the CLI executable path and arguments based on provider."""
+    def _initialize_ai_provider(self):
+        """Initialize the appropriate AI provider based on configuration."""
+        if self.config.ai_provider == "openai-compatible":
+            return OpenAiProvider(self.config, self)
+        if self.config.ai_provider == "gemini":
+            return GeminiProvider(self.config, self)
         if self.config.ai_provider == "claude":
-            cmd = self.config.claude_command
-            args = [
-                cmd,
-                "--dangerously-skip-permissions",
-                "--model", self.config.claude_model,
-            ]
-            # Add MCP config if specified
-            if self.config.claude_mcp_config:
-                args.extend(["--mcp-config", self.config.claude_mcp_config])
-            return cmd, args
-
-        if self.config.ai_provider == "codex-openai":
-            cmd = self.config.codex_command
-            args = [
-                cmd,
-                "exec",
-                "--model", self.config.codex_model,
-                "--full-auto",  # Auto-approve mode
-            ]
-            return cmd, args
-
-        # gemini (default)
-        cmd = self.config.gemini_command
-        args = [
-            cmd,
-            "--yolo",
-            "--model", self.config.gemini_model,
-            "--allowed-mcp-server-names", "mqtt-tools",
-        ]
-        return cmd, args
+            return ClaudeProvider(self.config, self)
+        else:
+            logging.error("Unknown AI provider configured: %s", self.config.ai_provider)
+            return None
 
     def run_analysis(self, messages_snapshot: str, kb: KnowledgeBase,
-                     trigger_reason: str):
-        """Construct the prompt and call the configured AI CLI."""
+                     trigger_reason: str, trigger_result=None):
+        """Construct the prompt and call the configured AI CLI.
+
+        Args:
+            messages_snapshot: Raw MQTT messages as newline-separated string
+            kb: KnowledgeBase with rules, patterns, and rulebook
+            trigger_reason: Human-readable trigger reason string
+            trigger_result: Optional TriggerResult with trigger context
+        """
         cyan, reset = "\033[96m", "\033[0m"
         provider = self.config.ai_provider.upper()
         logging.info(
@@ -87,202 +94,124 @@ class AiAgent:
             cyan, provider, trigger_reason, reset
         )
 
-        # Compress the snapshot to reduce token usage
-        compressed_snapshot = self._compress_snapshot(messages_snapshot)
-        prompt = self._build_prompt(compressed_snapshot, kb, trigger_reason)
-        self._execute_ai_call(provider, prompt)
-
-    def _compress_snapshot(self, messages_snapshot: str) -> str:
-        """Compress MQTT payloads by removing known noise fields.
-
-        Uses a blacklist approach: removes known noise fields, keeps everything else.
-        Also removes nested objects and null values.
-        """
-        compressed_lines = []
-
-        for line in messages_snapshot.split('\n'):
-            if not line.strip():
-                continue
-
-            # Try to find JSON payload in the line
-            # Format is typically: [HH:MM:SS] topic/path {"key": "value", ...}
-            try:
-                # Find the start of JSON payload
-                json_start = line.find('{')
-                if json_start == -1:
-                    # No JSON payload, keep line as-is
-                    compressed_lines.append(line)
-                    continue
-
-                prefix = line[:json_start]
-                json_str = line[json_start:]
-
-                # Parse and filter the JSON
-                payload = json.loads(json_str)
-                if isinstance(payload, dict):
-                    filtered = {
-                        k: v for k, v in payload.items()
-                        if k not in self.REMOVE_FIELDS  # Blacklist approach
-                        and v is not None  # Remove null values
-                        and not isinstance(v, dict)  # Remove nested objects
-                    }
-                    if filtered:
-                        compressed_lines.append(
-                            f"{prefix}{json.dumps(filtered, separators=(',', ':'))}"
-                        )
-                    # Skip lines with no remaining fields
-                else:
-                    # Not a dict, keep as-is
-                    compressed_lines.append(line)
-
-            except json.JSONDecodeError:
-                # Not valid JSON, keep line as-is
-                compressed_lines.append(line)
-
-        return '\n'.join(compressed_lines)
-
-    def _build_prompt(self, messages_snapshot: str, kb: KnowledgeBase,
-                      trigger_reason: str) -> str:
-        """Build the prompt for the AI."""
-        demo_instruction = (
-            "**Demo mode is ENABLED - you MUST send a unique joke to jokes/ topic (see Rule 4).** "
-            if self.config.demo_mode else ""
-        )
-
-        # Helper to format sections
-        def format_section(title, data, description):
-            if not data or not data.get(list(data.keys())[0]):
-                return ""
-            return (
-                f"\n\n## {title}:\n{description}\n"
-                f"{json.dumps(data, indent=2)}"
+        # Use PromptBuilder for intelligent prompt construction
+        if self.config.ai_provider == "openai-compatible":
+            prompt = self.prompt_builder.build_compact(
+                messages_snapshot, kb, trigger_result, trigger_reason
+            )
+        else:
+            prompt = self.prompt_builder.build(
+                messages_snapshot, kb, trigger_result, trigger_reason
             )
 
-        rules_section = format_section(
-            "Learned Automation Rules",
-            kb.learned_rules,
-            "Execute these rules when their triggers match:"
-        ) or "\n\n## Learned Automation Rules:\nNo learned rules yet.\n"
+        logging.debug("Prompt: %d chars (~%d tokens)", len(prompt), len(prompt)//4)
 
-        patterns_section = format_section(
-            "Pending Pattern Observations",
-            kb.pending_patterns,
-            "These patterns are being tracked but haven't reached 3 occurrences:"
-        )
+        # Get counts for stats display
+        rules_count = len(kb.learned_rules.get('rules', []))
+        patterns_count = len(kb.pending_patterns.get('patterns', []))
 
-        rejected_section = format_section(
-            "Rejected Patterns (DO NOT learn these)",
-            kb.rejected_patterns,
-            "These patterns have been explicitly rejected. Do NOT record or create:"
-        )
+        self._execute_ai_call(provider, prompt, rules_count, patterns_count)
 
-        # Safety Check
-        safety_reminder = ""
-        trigger_lower = trigger_reason.lower()
-        if any(x in trigger_lower for x in ["temperature", "smoke", "water", "leak"]):
-            safety_reminder = (
-                "\n\n**SAFETY ALERT**: This analysis was triggered by a potential "
-                "safety event. Check for temperature > 50C, smoke: true, or "
-                "water_leak: true conditions and ACT IMMEDIATELY if found. "
-                "Safety actions take PRIORITY over pattern learning.\n"
-            )
+    def _execute_ai_call(self, provider: str, prompt: str,
+                         rules_count: int = 0, patterns_count: int = 0):
+        """Execute the AI call using the appropriate SDK based on provider."""
+        if self.ai_provider_instance:
+            self.ai_provider_instance.execute_call(prompt, rules_count, patterns_count)
+        else:
+            logging.error("AI provider not initialized, cannot execute call.")
 
-        prompt = (
-            f"You are a home automation AI with pattern learning. {demo_instruction}"
-            f"{safety_reminder}"
-            "You have MCP tools available. Use the send_mqtt_message tool to publish "
-            "MQTT messages - do NOT use shell commands or file operations.\n\n"
-            "IMPORTANT: Your PRIMARY task is to detect trigger→action patterns "
-            "and call record_pattern_observation. "
-            "Look for PIR/motion sensors (occupancy:true) followed by light/switch "
-            "actions (/set topics with state:ON). "
-            "When you find such a pattern, ALWAYS call record_pattern_observation "
-            "with the trigger topic, field, action topic, and delay in seconds.\n\n"
-            "## Rulebook:\n"
-            f"{kb.rulebook_content}"
-            f"{rules_section}"
-            f"{patterns_section}"
-            f"{rejected_section}\n\n"
-            "## Latest MQTT Messages (analyze for trigger→action patterns):\n"
-            f"{messages_snapshot}\n\n"
-            "REMINDER: Look for patterns like 'zigbee2mqtt/xxx_pir {occupancy:true}' "
-            "followed by 'zigbee2mqtt/xxx/set {state:ON}' and call "
-            "record_pattern_observation!\n"
-        )
-        return prompt
+    def _announce_ai_action(self, topic: str, payload: str) -> None:
+        """Publish a causation announcement for an AI-initiated MQTT action."""
+        announcement = {
+            "source": "ai_analysis",
+            "rule_id": None,
+            "trigger_topic": None,
+            "trigger_field": None,
+            "trigger_value": None,
+            "action_topic": topic,
+            "action_payload": payload,
+            "timestamp": datetime.now().isoformat()
+        }
 
-    def _execute_ai_call(self, provider: str, prompt: str):
-        """Execute the AI CLI call."""
+        announce_topic = "mqtt2ai/action/announce"
         try:
-            cli_cmd, cli_args = self._get_cli_command()
-
-            if not shutil.which(cli_cmd):
-                logging.error(
-                    "Error: %s CLI not found or not executable at '%s'",
-                    provider, cli_cmd
-                )
-                return
-
-            # Call AI CLI
-            result = subprocess.run(
-                cli_args,
-                input=prompt,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=120,
-            )
-
-            response_text = result.stdout.strip()
-            cyan, reset = "\033[96m", "\033[0m"
-            logging.info("%sAI Response: %s%s", cyan, response_text, reset)
-
-        except subprocess.TimeoutExpired:
-            logging.error("%s CLI timed out after 120 seconds", provider)
-        except subprocess.CalledProcessError as e:
-            logging.error(
-                "%s CLI failed with exit code %d: %s",
-                provider, e.returncode, e.stderr
-            )
+            tools.send_mqtt_message(announce_topic, json.dumps(announcement), context=self.event_bus)
         except Exception as e:  # pylint: disable=broad-exception-caught
-            logging.error("Unexpected error during AI check: %s", e)
+            logging.warning("Failed to publish AI action announcement: %s", e)
+
+    def execute_tool_call(self, tool_name: str, arguments: dict) -> str:
+        """Execute a tool and return the result."""
+        # Publish AI_TOOL_CALLED event
+
+        event_bus.publish(EventType.AI_TOOL_CALLED, {
+            "tool": tool_name,
+            "arguments": arguments
+        })
+
+        # For send_mqtt_message, publish announcement first
+        if tool_name == "send_mqtt_message":
+            topic = arguments.get("topic", "")
+            payload = arguments.get("payload", "")
+
+            # Skip announcement for announce topic itself to avoid recursion
+            if not topic.startswith("mqtt2ai/"):
+                self._announce_ai_action(topic, payload)
+
+            try:
+                return tools.send_mqtt_message(topic, payload, context=self.event_bus)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                return f"Error executing {tool_name}: {e}"
+
+        tool_map = {
+            "record_pattern_observation": lambda args: tools.record_pattern_observation(
+                args["trigger_topic"], args["trigger_field"],
+                args["action_topic"], args["delay_seconds"]
+            ),
+            "create_rule": lambda args: tools.create_rule(
+                args["rule_id"], args["trigger_topic"], args["trigger_field"],
+                args["trigger_value"], args["action_topic"], args["action_payload"],
+                args["avg_delay_seconds"], args["tolerance_seconds"]
+            ),
+            "reject_pattern": lambda args: tools.reject_pattern(
+                args["trigger_topic"], args["trigger_field"],
+                args["action_topic"], args.get("reason", "")
+            ),
+            "report_undo": lambda args: tools.report_undo(args["rule_id"]),
+            "toggle_rule": lambda args: tools.toggle_rule(
+                args["rule_id"], args["enabled"]
+            ),
+            "get_learned_rules": lambda args: tools.get_learned_rules(),
+            "get_pending_patterns": lambda args: tools.get_pending_patterns(),
+            "raise_alert": lambda args: self.alert_handler.raise_alert(
+                args["severity"], args["reason"], args.get("context")
+            ),
+        }
+
+        if tool_name in tool_map:
+            try:
+                return tool_map[tool_name](arguments)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                return f"Error executing {tool_name}: {e}"
+        return f"Unknown tool: {tool_name}"
+
+    
+
+
+
+
+
+
+
+
 
     def test_connection(self) -> tuple[bool, str]:
-        """
-        Test AI connection by asking it to write a joke and send it via MCP.
-
-        Returns:
-            Tuple of (success: bool, message: str with AI response or error)
-        """
+        """Test AI connection by asking it to write a joke."""
         provider = self.config.ai_provider.upper()
-        cli_cmd, cli_args = self._get_cli_command()
 
-        # Check if CLI executable exists
-        if not shutil.which(cli_cmd):
-            return False, f"{provider} CLI not found or not executable at '{cli_cmd}'"
+        if self.ai_provider_instance:
+            return self.ai_provider_instance.test_connection()
+        return False, f"Unknown AI provider: {self.config.ai_provider}"
 
-        test_prompt = (
-            "This is a connection test. Write a short, funny joke and send it using "
-            "the send_mqtt_message tool to topic 'test/ai_joke'. "
-            "After sending, confirm what you did."
-        )
 
-        try:
-            result = subprocess.run(
-                cli_args,
-                input=test_prompt,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=60,
-            )
 
-            response_text = result.stdout.strip()
-            return True, response_text
 
-        except subprocess.TimeoutExpired:
-            return False, f"{provider} CLI timed out after 60 seconds"
-        except subprocess.CalledProcessError as e:
-            return False, f"{provider} CLI failed with exit code {e.returncode}: {e.stderr}"
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            return False, f"Unexpected error: {e}"

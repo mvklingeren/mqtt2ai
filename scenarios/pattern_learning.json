@@ -1,0 +1,36 @@
+{
+  "name": "Pattern Learning Test",
+  "description": "Simulates repeated PIR motion followed by manual light activation to test pattern learning. The AI should observe the pattern 3+ times and create a rule.",
+  "variables": {
+    "user_reaction_delay": 2,
+    "cooldown_between_events": 30
+  },
+  "messages": [
+    {"_comment": "=== First occurrence: PIR triggers, user turns on light ==="},
+    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": true, "battery": 85, "linkquality": 120}, "delay": 0},
+    {"topic": "zigbee2mqtt/hallway_light/set", "payload": {"state": "ON"}, "delay": "{{user_reaction_delay}}"},
+    {"topic": "zigbee2mqtt/hallway_light", "payload": {"state": "ON", "brightness": 254}, "delay": 0.1},
+    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": false, "battery": 85, "linkquality": 120}, "delay": 10},
+    
+    {"_comment": "=== Second occurrence: Same pattern ==="},
+    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": true, "battery": 85, "linkquality": 118}, "delay": "{{cooldown_between_events}}"},
+    {"topic": "zigbee2mqtt/hallway_light/set", "payload": {"state": "ON"}, "delay": "{{user_reaction_delay}}"},
+    {"topic": "zigbee2mqtt/hallway_light", "payload": {"state": "ON", "brightness": 254}, "delay": 0.1},
+    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": false, "battery": 85, "linkquality": 118}, "delay": 10},
+    
+    {"_comment": "=== Third occurrence: Pattern should be learned now ==="},
+    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": true, "battery": 84, "linkquality": 122}, "delay": "{{cooldown_between_events}}"},
+    {"topic": "zigbee2mqtt/hallway_light/set", "payload": {"state": "ON"}, "delay": "{{user_reaction_delay}}"},
+    {"topic": "zigbee2mqtt/hallway_light", "payload": {"state": "ON", "brightness": 254}, "delay": 0.1},
+    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": false, "battery": 84, "linkquality": 122}, "delay": 10},
+    
+    {"_comment": "=== Fourth occurrence: AI should now automate this ==="},
+    {"topic": "zigbee2mqtt/hallway_pir", "payload": {"occupancy": true, "battery": 84, "linkquality": 120}, "delay": "{{cooldown_between_events}}"},
+    
+    {"_comment": "=== Some noise messages to simulate real environment ==="},
+    {"topic": "zigbee2mqtt/temperature_sensor", "payload": {"temperature": 21.5, "humidity": 45, "battery": 90}, "delay": 5},
+    {"topic": "zigbee2mqtt/power_plug", "payload": {"power": 150, "current": 0.65, "voltage": 230}, "delay": 3}
+  ],
+  "speed_multiplier": 5
+}
+

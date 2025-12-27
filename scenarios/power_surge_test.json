@@ -1,0 +1,30 @@
+{
+  "name": "Power Surge Detection Test",
+  "description": "Simulates power consumption changes to test numeric field triggers (immediate delta detection).",
+  "variables": {
+    "normal_power": 50,
+    "high_power": 200,
+    "very_high_power": 500
+  },
+  "messages": [
+    {"_comment": "=== Baseline power readings ==="},
+    {"topic": "zigbee2mqtt/washing_machine_plug", "payload": {"power": "{{normal_power}}", "current": 0.22, "voltage": 230, "state": "ON"}, "delay": 0},
+    {"topic": "zigbee2mqtt/washing_machine_plug", "payload": {"power": 52, "current": 0.23, "voltage": 230, "state": "ON"}, "delay": 2},
+    {"topic": "zigbee2mqtt/washing_machine_plug", "payload": {"power": 48, "current": 0.21, "voltage": 230, "state": "ON"}, "delay": 2},
+    
+    {"_comment": "=== Power surge - should trigger (delta > 100W) ==="},
+    {"topic": "zigbee2mqtt/washing_machine_plug", "payload": {"power": "{{high_power}}", "current": 0.87, "voltage": 230, "state": "ON"}, "delay": 2},
+    
+    {"_comment": "=== Power stabilizes at high level ==="},
+    {"topic": "zigbee2mqtt/washing_machine_plug", "payload": {"power": 210, "current": 0.91, "voltage": 230, "state": "ON"}, "delay": 5},
+    {"topic": "zigbee2mqtt/washing_machine_plug", "payload": {"power": 195, "current": 0.85, "voltage": 230, "state": "ON"}, "delay": 5},
+    
+    {"_comment": "=== Another power surge ==="},
+    {"topic": "zigbee2mqtt/washing_machine_plug", "payload": {"power": "{{very_high_power}}", "current": 2.17, "voltage": 230, "state": "ON"}, "delay": 5},
+    
+    {"_comment": "=== Cycle complete, power drops ==="},
+    {"topic": "zigbee2mqtt/washing_machine_plug", "payload": {"power": 5, "current": 0.02, "voltage": 230, "state": "ON"}, "delay": 10}
+  ],
+  "speed_multiplier": 5
+}
+

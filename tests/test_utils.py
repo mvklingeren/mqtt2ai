@@ -1,10 +1,11 @@
 """Tests for the utils module."""
 import json
 import os
-import subprocess
 import sys
 
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -183,24 +184,42 @@ class TestSaveJsonFile:
         assert loaded == original
 
 
+@pytest.fixture
+def mock_paho_client():
+    """Mock paho.mqtt.client.Client for utils module."""
+    with patch("utils.mqtt.Client") as mock_client_class:
+        mock_instance = MagicMock()
+        mock_client_class.return_value = mock_instance
+
+        # Mock publish result
+        mock_result = MagicMock()
+        mock_result.rc = 0  # MQTT_ERR_SUCCESS
+        mock_result.wait_for_publish = MagicMock()
+        mock_instance.publish.return_value = mock_result
+
+        yield mock_instance
+
+
+@pytest.fixture(autouse=True)
+def reset_utils_client():
+    """Reset the module-level MQTT client before each test."""
+    import utils
+    utils._MQTT_CLIENT = None
+    yield
+    utils._MQTT_CLIENT = None
+
+
 class TestPublishMqtt:
     """Tests for publish_mqtt function."""
 
-    def test_publish_mqtt_success(self, mock_subprocess_run):
+    def test_publish_mqtt_success(self, mock_paho_client):
         """Test successful MQTT publish."""
         result = publish_mqtt("test/topic", {"state": "ON"})
 
         assert result is True
-        mock_subprocess_run.assert_called_once()
+        mock_paho_client.publish.assert_called_once()
 
-        # Verify the command arguments
-        call_args = mock_subprocess_run.call_args[0][0]
-        assert "mosquitto_pub" in call_args
-        assert "-t" in call_args
-        assert "test/topic" in call_args
-        assert "-m" in call_args
-
-    def test_publish_mqtt_with_custom_host_port(self, mock_subprocess_run):
+    def test_publish_mqtt_with_custom_host_port(self, mock_paho_client):
         """Test MQTT publish with custom host and port."""
         result = publish_mqtt(
             "test/topic",
@@ -210,47 +229,48 @@ class TestPublishMqtt:
         )
 
         assert result is True
-        call_args = mock_subprocess_run.call_args[0][0]
-        assert "-h" in call_args
-        assert "10.0.0.1" in call_args
-        assert "-p" in call_args
-        assert "8883" in call_args
+        # Verify connection was made to custom host/port
+        mock_paho_client.connect.assert_called_with("10.0.0.1", 8883, keepalive=60)
 
-    def test_publish_mqtt_serializes_payload(self, mock_subprocess_run):
+    def test_publish_mqtt_serializes_payload(self, mock_paho_client):
         """Test that payload is JSON serialized."""
         payload = {"key": "value", "number": 42}
         publish_mqtt("test/topic", payload)
 
-        call_args = mock_subprocess_run.call_args[0][0]
-        # Find the message argument
-        msg_idx = call_args.index("-m") + 1
-        sent_payload = call_args[msg_idx]
+        call_args = mock_paho_client.publish.call_args[0]
+        sent_payload = call_args[1]
 
         # Verify it's valid JSON
         parsed = json.loads(sent_payload)
         assert parsed == payload
 
-    def test_publish_mqtt_file_not_found(self):
-        """Test MQTT publish when mosquitto_pub is not found."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = FileNotFoundError()
+    def test_publish_mqtt_connection_error(self):
+        """Test MQTT publish when connection fails."""
+        with patch("utils.mqtt.Client") as mock_client_class:
+            mock_client_class.return_value.connect.side_effect = Exception("Connection refused")
             result = publish_mqtt("test/topic", {"state": "ON"})
 
         assert result is False
 
-    def test_publish_mqtt_subprocess_error(self):
-        """Test MQTT publish when subprocess fails."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = subprocess.CalledProcessError(1, "mosquitto_pub")
-            mock_run.side_effect.stderr = "Connection refused"
-            result = publish_mqtt("test/topic", {"state": "ON"})
+    def test_publish_mqtt_publish_error(self, mock_paho_client):
+        """Test MQTT publish when publish fails."""
+        mock_result = mock_paho_client.publish.return_value
+        mock_result.rc = 1  # Not SUCCESS
+
+        result = publish_mqtt("test/topic", {"state": "ON"})
 
         assert result is False
 
-    def test_publish_mqtt_uses_default_host_port(self, mock_subprocess_run):
-        """Test MQTT publish uses default host and port."""
+    def test_publish_mqtt_uses_qos_1(self, mock_paho_client):
+        """Test that publish uses QoS 1."""
         publish_mqtt("test/topic", {"state": "ON"})
 
-        call_args = mock_subprocess_run.call_args[0][0]
-        assert "192.168.1.245" in call_args
-        assert "1883" in call_args
+        call_kwargs = mock_paho_client.publish.call_args[1]
+        assert call_kwargs.get("qos") == 1
+
+    def test_publish_mqtt_correct_topic(self, mock_paho_client):
+        """Test that correct topic is used."""
+        publish_mqtt("zigbee2mqtt/light/set", {"state": "ON"})
+
+        call_args = mock_paho_client.publish.call_args[0]
+        assert call_args[0] == "zigbee2mqtt/light/set"

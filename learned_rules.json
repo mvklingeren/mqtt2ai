@@ -1,46 +1,5 @@
 {
   "rules": [
-    {
-      "id": "pir_test_light_on",
-      "trigger": {
-        "topic": "zigbee2mqtt/test_pir",
-        "field": "occupancy",
-        "value": true
-      },
-      "action": {
-        "topic": "zigbee2mqtt/test_light/set",
-        "payload": "{\"state\": \"ON\"}"
-      },
-      "timing": {
-        "avg_delay_seconds": 2.5,
-        "tolerance_seconds": 1.0
-      },
-      "confidence": {
-        "occurrences": 9,
-        "last_triggered": "2025-12-19T13:28:15.795874"
-      },
-      "enabled": true
-    },
-    {
-      "id": "multisensor_test_light_on",
-      "trigger": {
-        "topic": "homie/homey/multisensor-6",
-        "field": "alarm-motion",
-        "value": true
-      },
-      "action": {
-        "topic": "zigbee2mqtt/test_light/set",
-        "payload": "{\"state\": \"ON\"}"
-      },
-      "timing": {
-        "avg_delay_seconds": 16.0,
-        "tolerance_seconds": 1.0
-      },
-      "confidence": {
-        "occurrences": 3,
-        "last_triggered": "2025-12-20T07:43:21.750618"
-      },
-      "enabled": true
-    }
+   
   ]
 }
