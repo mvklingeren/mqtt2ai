@@ -190,18 +190,63 @@ python mqtt_ai_daemon.py \
 
 ## Environment Variables
 
-| Variable            | Description                                   |
-| ------------------- | --------------------------------------------- |
-| `MQTT_HOST`         | MQTT broker hostname                          |
-| `MQTT_PORT`         | MQTT broker port                              |
-| `AI_PROVIDER`       | AI provider to use                            |
-| `GROQ_API_KEY`      | API key for Groq                              |
-| `OPENAI_API_KEY`    | API key for OpenAI-compatible APIs            |
-| `OPENAI_API_BASE`   | Base URL for OpenAI-compatible API            |
-| `OPENAI_MODELS`     | Comma-separated model list                    |
-| `GEMINI_API_KEY`    | API key for Google Gemini                     |
-| `ANTHROPIC_API_KEY` | API key for Anthropic Claude                  |
-| `DISABLE_NEW_RULES` | Set to `true` to disable new rules by default |
+You can set environment variables directly or use a `.env` file in the project root. The daemon automatically loads `.env` if the `python-dotenv` package is installed.
+
+| Variable             | Description                                          |
+| -------------------- | ---------------------------------------------------- |
+| `MQTT_HOST`          | MQTT broker hostname                                 |
+| `MQTT_PORT`          | MQTT broker port                                     |
+| `AI_PROVIDER`        | AI provider to use                                   |
+| `GROQ_API_KEY`       | API key for Groq                                     |
+| `OPENAI_API_KEY`     | API key for OpenAI-compatible APIs                   |
+| `OPENAI_API_BASE`    | Base URL for OpenAI-compatible API                   |
+| `OPENAI_MODELS`      | Comma-separated model list                           |
+| `GEMINI_API_KEY`     | API key for Google Gemini                            |
+| `ANTHROPIC_API_KEY`  | API key for Anthropic Claude                         |
+| `DISABLE_NEW_RULES`  | Set to `true` to disable new rules by default        |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather                    |
+| `TELEGRAM_CHAT_IDS`  | Comma-separated list of authorized Telegram chat IDs |
+
+---
+
+## Telegram Integration
+
+MQTT2AI can send notifications and receive commands via Telegram. This is useful for security alerts, automation status updates, and remote control.
+
+### Setup
+
+1. **Create a bot** with [@BotFather](https://t.me/BotFather) on Telegram
+2. **Get your chat ID** by messaging [@userinfobot](https://t.me/userinfobot) or starting a conversation with your bot and checking the API
+3. **Configure** via environment variables or command-line:
+
+```bash
+# Via environment variables
+export TELEGRAM_BOT_TOKEN="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+export TELEGRAM_CHAT_IDS="123456789,987654321"
+
+# Or via .env file
+echo 'TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz' >> .env
+echo 'TELEGRAM_CHAT_IDS=123456789,987654321' >> .env
+
+# Or via command-line
+python mqtt_ai_daemon.py \
+    --telegram-token "123456789:ABCdefGHIjklMNOpqrsTUVwxyz" \
+    --telegram-chat-ids "123456789,987654321"
+```
+
+### Command-Line Options
+
+| Parameter             | Description                                                    |
+| --------------------- | -------------------------------------------------------------- |
+| `--telegram-token`    | Telegram Bot token from BotFather (env: `TELEGRAM_BOT_TOKEN`)  |
+| `--telegram-chat-ids` | Comma-separated authorized chat IDs (env: `TELEGRAM_CHAT_IDS`) |
+| `--no-telegram`       | Disable Telegram bot even if token is configured               |
+
+### Features
+
+- **Security alerts** are sent to all configured chat IDs
+- **Only authorized chat IDs** can interact with the bot
+- Telegram is automatically enabled when `TELEGRAM_BOT_TOKEN` is set
 
 ---
 
@@ -212,14 +257,14 @@ python mqtt_ai_daemon.py \
 | `learned_rules.json`     | Active automation rules (trigger → action mappings)   |
 | `pending_patterns.json`  | Pattern observations awaiting rule creation           |
 | `rejected_patterns.json` | Patterns marked as coincidental (won't become rules)  |
-| `rulebook.md`            | Decision rules and guidelines passed to AI as context |
+| `prompt_templates.py`    | COMPACT_RULEBOOK and other prompt constants           |
 | `filtered_triggers.json` | Configuration for trigger filtering                   |
 
 ---
 
 ## Decision Rules (Rulebook)
 
-The `rulebook.md` defines how the AI should respond to events:
+The `COMPACT_RULEBOOK` in `prompt_templates.py` defines how the AI should respond to events:
 
 ### 1. Security Alerts
 When security is `armed_home` or `armed_away`:

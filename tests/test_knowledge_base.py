@@ -223,3 +223,120 @@ class TestKnowledgeBaseEmptyStructures:
         assert isinstance(kb.rejected_patterns["patterns"], list)
 
 
+class TestKnowledgeBaseMtimeOptimization:
+    """Tests for mtime-based caching optimization."""
+
+    def test_load_all_skips_when_unchanged(self, config_with_temp_files, mocker):
+        """Test that load_all skips I/O when files haven't changed."""
+        # Create initial rules file
+        initial_rules = {"rules": [{"id": "test_rule"}]}
+        with open(config_with_temp_files.learned_rules_file, "w", encoding="utf-8") as f:
+            json.dump(initial_rules, f)
+
+        kb = KnowledgeBase(config_with_temp_files)
+
+        # First load - should read files
+        kb.load_all()
+        assert kb.learned_rules == initial_rules
+
+        # Spy on the _do_load method
+        do_load_spy = mocker.spy(kb, '_do_load')
+
+        # Second load without changes - should skip I/O
+        kb.load_all()
+
+        # _do_load should NOT have been called
+        do_load_spy.assert_not_called()
+
+    def test_load_all_reloads_when_file_modified(self, config_with_temp_files):
+        """Test that load_all reloads when files are modified."""
+        import time
+
+        # Create initial rules file
+        initial_rules = {"rules": [{"id": "initial_rule"}]}
+        with open(config_with_temp_files.learned_rules_file, "w", encoding="utf-8") as f:
+            json.dump(initial_rules, f)
+
+        kb = KnowledgeBase(config_with_temp_files)
+        kb.load_all()
+        assert kb.learned_rules["rules"][0]["id"] == "initial_rule"
+
+        # Wait a moment to ensure mtime changes
+        time.sleep(0.1)
+
+        # Modify the file
+        updated_rules = {"rules": [{"id": "updated_rule"}]}
+        with open(config_with_temp_files.learned_rules_file, "w", encoding="utf-8") as f:
+            json.dump(updated_rules, f)
+
+        # Should reload and pick up changes
+        kb.load_all()
+        assert kb.learned_rules["rules"][0]["id"] == "updated_rule"
+
+    def test_force_reload_always_reloads(self, config_with_temp_files, mocker):
+        """Test that force_reload always reads files regardless of mtime."""
+        initial_rules = {"rules": [{"id": "test_rule"}]}
+        with open(config_with_temp_files.learned_rules_file, "w", encoding="utf-8") as f:
+            json.dump(initial_rules, f)
+
+        kb = KnowledgeBase(config_with_temp_files)
+
+        # First load
+        kb.force_reload()
+
+        # Spy on _do_load
+        do_load_spy = mocker.spy(kb, '_do_load')
+
+        # force_reload should always call _do_load even when files unchanged
+        kb.force_reload()
+        do_load_spy.assert_called_once()
+
+    def test_mtime_tracking_initialized_empty(self, config):
+        """Test that mtime tracking starts empty."""
+        kb = KnowledgeBase(config)
+        assert kb._file_mtimes == {}
+
+    def test_mtime_updated_after_load(self, config_with_temp_files):
+        """Test that mtimes are updated after loading."""
+        # Create a rules file
+        with open(config_with_temp_files.learned_rules_file, "w", encoding="utf-8") as f:
+            json.dump({"rules": []}, f)
+
+        kb = KnowledgeBase(config_with_temp_files)
+        assert kb._file_mtimes == {}
+
+        kb.load_all()
+
+        # Should have recorded mtime for learned_rules_file
+        assert config_with_temp_files.learned_rules_file in kb._file_mtimes
+        assert kb._file_mtimes[config_with_temp_files.learned_rules_file] > 0
+
+    def test_get_file_mtime_returns_zero_for_missing_file(self, config):
+        """Test that _get_file_mtime returns 0 for non-existent files."""
+        kb = KnowledgeBase(config)
+        mtime = kb._get_file_mtime("/nonexistent/path/file.json")
+        assert mtime == 0.0
+
+    def test_needs_reload_true_on_first_call(self, config_with_temp_files):
+        """Test that _needs_reload returns True on first call when files exist."""
+        # Create at least one file so mtime differs from cached 0
+        with open(config_with_temp_files.learned_rules_file, "w", encoding="utf-8") as f:
+            json.dump({"rules": []}, f)
+
+        kb = KnowledgeBase(config_with_temp_files)
+        # Files exist but no cached mtimes, so should need reload
+        assert kb._needs_reload() is True
+
+    def test_needs_reload_false_after_load(self, config_with_temp_files):
+        """Test that _needs_reload returns False immediately after load."""
+        # Create files
+        with open(config_with_temp_files.learned_rules_file, "w", encoding="utf-8") as f:
+            json.dump({"rules": []}, f)
+
+        kb = KnowledgeBase(config_with_temp_files)
+        kb.load_all()
+
+        # Should return False since nothing changed
+        assert kb._needs_reload() is False
+
+

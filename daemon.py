@@ -28,6 +28,8 @@ from ai_agent import AiAgent
 from trigger_analyzer import TriggerAnalyzer, TriggerResult
 from event_bus import event_bus, EventType
 from telegram_bot import TelegramBot
+from rule_engine import RuleEngine
+from device_state_tracker import DeviceStateTracker
 import tools
 
 VERSION = "0.2"
@@ -59,254 +61,6 @@ class RuntimeContext:
     """Holds runtime dependencies for injection."""
     mqtt_client: 'MqttClient'
     device_tracker: 'DeviceStateTracker'
-
-
-class DeviceStateTracker:
-    """Tracks the last known state of devices matching a topic pattern.
-
-    This provides an in-memory cache of device states that can be used
-    by the alert system to give the AI full context about available devices.
-    """
-
-    def __init__(self, pattern: str = "zigbee2mqtt/*"):
-        """Initialize the tracker with a topic pattern.
-
-        Args:
-            pattern: Glob pattern for topics to track (e.g., "zigbee2mqtt/*")
-        """
-        self.pattern = pattern
-        # Convert glob to regex for matching
-        # zigbee2mqtt/* -> ^zigbee2mqtt/[^/]+$
-        regex_pattern = pattern.replace("*", "[^/]+")
-        self._pattern_re = re.compile(f"^{regex_pattern}$")
-        self._states: dict[str, dict] = {}
-        self._lock = threading.Lock()
-        self._last_cleanup = time.time()
-
-    def should_track(self, topic: str) -> bool:
-        """Check if a topic should be tracked.
-
-        Excludes:
-        - /set and /get suffixes (commands, not state)
-        - bridge/ topics (not device state)
-        """
-        if topic.endswith("/set") or topic.endswith("/get"):
-            return False
-        if "/bridge/" in topic:
-            return False
-        return bool(self._pattern_re.match(topic))
-
-    def update(self, topic: str, payload: str) -> None:
-        """Update the state for a device topic.
-
-        Args:
-            topic: The MQTT topic
-            payload: The raw payload string (JSON expected)
-        """
-        if not self.should_track(topic):
-            return
-
-        try:
-            state = json.loads(payload)
-            if isinstance(state, dict):
-                with self._lock:
-                    self._states[topic] = state
-                    self._states[topic]['_updated'] = time.time()
-        except json.JSONDecodeError:
-            pass  # Ignore non-JSON payloads
-
-        # Periodic cleanup (chance based to avoid checking every message)
-        if time.time() - self._last_cleanup > 3600:
-            self.cleanup()
-
-    def get_all_states(self) -> dict[str, dict]:
-        """Get a copy of all tracked device states.
-
-        Returns:
-            Dict mapping topic -> last known state
-        """
-        with self._lock:
-            return dict(self._states)
-
-    def get_state(self, topic: str) -> Optional[dict]:
-        """Get the last known state for a specific topic.
-
-        Args:
-            topic: The MQTT topic
-
-        Returns:
-            The last known state dict, or None if not tracked
-        """
-        with self._lock:
-            return self._states.get(topic)
-
-    def get_device_count(self) -> int:
-        """Get the number of tracked devices."""
-        with self._lock:
-            return len(self._states)
-
-    def cleanup(self, max_age_seconds: float = 86400 * 7) -> int:
-        """Remove stale devices that haven't updated in a long time.
-
-        Args:
-            max_age_seconds: Max age in seconds (default: 7 days)
-
-        Returns:
-            Number of removed devices
-        """
-        now = time.time()
-        removed = 0
-        with self._lock:
-            to_remove = []
-            for topic, state in self._states.items():
-                last_updated = state.get('_updated', 0)
-                if now - last_updated > max_age_seconds:
-                    to_remove.append(topic)
-
-            for topic in to_remove:
-                del self._states[topic]
-                removed += 1
-
-            self._last_cleanup = now
-
-        if removed > 0:
-            logging.info("DeviceStateTracker cleanup: removed %d stale devices", removed)
-        return removed
-
-
-class RuleEngine:
-    """Executes learned rules directly without AI for matched triggers.
-
-    This provides fast, deterministic execution of fixed automation rules
-    while reserving AI for anomaly detection and pattern learning.
-    """
-
-    # Topic for publishing causation announcements
-    ANNOUNCE_TOPIC = "mqtt2ai/action/announce"
-
-    def __init__(self, mqtt_client: 'MqttClient', kb: 'KnowledgeBase'):
-        self.mqtt = mqtt_client
-        self.kb = kb
-
-    def check_and_execute(
-        self,
-        topic: str,
-        payload_str: str,
-        trigger_result: TriggerResult
-    ) -> bool:
-        """Check if any enabled rule matches and execute directly.
-
-        Args:
-            topic: The MQTT topic that triggered
-            payload_str: The raw payload string (JSON)
-            trigger_result: The TriggerResult from TriggerAnalyzer
-
-        Returns:
-            True if a rule was executed (handled), False otherwise
-        """
-        if not trigger_result.should_trigger:
-            return False
-
-        # Parse payload
-        try:
-            payload = json.loads(payload_str)
-        except json.JSONDecodeError:
-            return False
-
-        if not isinstance(payload, dict):
-            return False
-
-        # Reload rules to get latest state
-        rules = self.kb.learned_rules.get("rules", [])
-
-        for rule in rules:
-            if not rule.get("enabled", True):
-                continue
-
-            if self._matches(rule, topic, payload, trigger_result):
-                self._announce_and_execute(rule, topic, trigger_result)
-                # Publish RULE_EXECUTED event for validation
-                event_bus.publish(EventType.RULE_EXECUTED, {
-                    "rule_id": rule.get("id"),
-                    "trigger_topic": topic,
-                    "trigger_field": trigger_result.field_name,
-                    "action_topic": rule.get("action", {}).get("topic")
-                })
-                return True
-
-        return False
-
-    def _matches(
-        self,
-        rule: dict,
-        topic: str,
-        payload: dict,
-        trigger_result: TriggerResult
-    ) -> bool:
-        """Check if a rule matches the current trigger event."""
-        trigger = rule.get("trigger", {})
-
-        # Check topic match
-        if trigger.get("topic") != topic:
-            return False
-
-        # Check field match
-        rule_field = trigger.get("field")
-        if rule_field != trigger_result.field_name:
-            return False
-
-        # Check value match
-        rule_value = trigger.get("value")
-        actual_value = payload.get(rule_field)
-
-        # Handle type conversion for comparison
-        if rule_value == actual_value:
-            return True
-
-        # Try string comparison for booleans/numbers
-        if str(rule_value).lower() == str(actual_value).lower():
-            return True
-
-        return False
-
-    def _announce_and_execute(
-        self,
-        rule: dict,
-        trigger_topic: str,
-        trigger_result: TriggerResult
-    ):
-        """Publish causation announcement and then execute the rule action."""
-        rule_id = rule.get("id", "unknown")
-        trigger = rule.get("trigger", {})
-        action = rule.get("action", {})
-
-        action_topic = action.get("topic", "")
-        action_payload = action.get("payload", "{}")
-
-        # Build announcement message
-        announcement = {
-            "source": "direct_rule",
-            "rule_id": rule_id,
-            "trigger_topic": trigger_topic,
-            "trigger_field": trigger_result.field_name,
-            "trigger_value": trigger_result.new_value,
-            "action_topic": action_topic,
-            "action_payload": action_payload,
-            "timestamp": datetime.now().isoformat()
-        }
-
-        # Publish announcement first
-        green, reset = "\033[92m", "\033[0m"
-        logging.info(
-            "%s[DIRECT RULE] %s: %s[%s=%s] -> %s%s",
-            green, rule_id, trigger_topic, trigger_result.field_name,
-            trigger_result.new_value, action_topic, reset
-        )
-
-        self.mqtt.publish(self.ANNOUNCE_TOPIC, json.dumps(announcement))
-
-        # Then execute the action
-        self.mqtt.publish(action_topic, action_payload)
 
 
 def setup_logging(config: Config):
@@ -401,6 +155,10 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         self.running = True
         self.collector_thread: Optional[threading.Thread] = None
 
+        # Graceful shutdown signaling from collector threads
+        self.shutdown_event = threading.Event()
+        self.shutdown_reason: Optional[str] = None
+
         # AI worker thread and queue for async AI calls
         # Use larger queue to handle bursts of events without dropping
         self.ai_queue: queue.Queue[Optional[AiRequest]] = queue.Queue(maxsize=20)
@@ -435,13 +193,24 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             # Set global reference for tools module
             tools.set_telegram_bot(self.telegram_bot)
 
+    def _request_shutdown(self, reason: str):
+        """Signal the main loop to perform a graceful shutdown.
+
+        This method is thread-safe and can be called from collector threads
+        to request a clean shutdown instead of using os.kill().
+        """
+        self.shutdown_reason = reason
+        self.running = False
+        self.shutdown_event.set()
+        self.ai_event.set()  # Wake up main loop
+
     def start(self):
         """Start the daemon."""
         setup_logging(self.config)
         print_banner(self.config)
 
-        # Load initial state
-        self.kb.load_all()
+        # Load initial state (force reload to ensure files are read on startup)
+        self.kb.force_reload()
 
         # Print trigger analyzer stats
         stats = self.trigger_analyzer.get_stats()
@@ -535,6 +304,12 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 # Clear event immediately so we can set it again
                 if self.ai_event.is_set():
                     self.ai_event.clear()
+
+                # Check for shutdown signal from collector threads
+                if self.shutdown_event.is_set():
+                    if self.shutdown_reason:
+                        logging.critical("Shutdown requested: %s", self.shutdown_reason)
+                    break
 
                 with self.lock:
                     should_check_count = (
@@ -858,7 +633,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 self.mqtt_message_queue
             ):
                 logging.critical("Failed to subscribe to MQTT topics")
-                os.kill(os.getpid(), signal.SIGTERM)
+                self._request_shutdown("Failed to subscribe to MQTT topics")
                 return
 
             while self.running:
@@ -1054,7 +829,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
 
         except FileNotFoundError as e:
             logging.critical("CRITICAL: Scenario file not found: %s", e)
-            os.kill(os.getpid(), signal.SIGTERM)
+            self._request_shutdown(f"Scenario file not found: {e}")
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("Simulation collector error: %s", e)
             self.running = False

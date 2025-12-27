@@ -1,4 +1,4 @@
-"""Tests for the RuleEngine class in daemon.py."""
+"""Tests for the RuleEngine class."""
 import json
 import os
 import sys
@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import Config
 from knowledge_base import KnowledgeBase
 from trigger_analyzer import TriggerResult
-from daemon import RuleEngine
+from rule_engine import RuleEngine
 
 
 @pytest.fixture
