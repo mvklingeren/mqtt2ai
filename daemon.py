@@ -4,7 +4,6 @@ This module contains the main MqttAiDaemon class that orchestrates
 the MQTT message collection, trigger analysis, and AI integration.
 """
 import collections
-import json
 import queue
 import select
 import sys
@@ -25,6 +24,7 @@ from mqtt_collector import MqttCollector, CollectorCallbacks
 from trigger_analyzer import TriggerAnalyzer, TriggerResult
 from event_bus import event_bus
 from telegram_bot import TelegramBot
+from telegram_handler import TelegramHandler
 from rule_engine import RuleEngine
 from device_state_tracker import DeviceStateTracker
 import tools
@@ -178,10 +178,15 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         # Telegram bot for bidirectional communication
         self.telegram_bot: Optional[TelegramBot] = None
         if config.telegram_enabled:
+            self.telegram_handler = TelegramHandler(
+                config=config,
+                ai_agent=self.ai,
+                device_tracker=self.device_tracker
+            )
             self.telegram_bot = TelegramBot(
                 config,
                 device_tracker=self.device_tracker,
-                on_user_message=self._handle_telegram_message
+                on_user_message=self.telegram_handler.handle_message
             )
             # Connect Telegram bot to AI agent for alert notifications
             self.ai.set_telegram_bot(self.telegram_bot)
@@ -417,85 +422,6 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             except Exception:  # pylint: disable=broad-exception-caught
                 # Stdin might not be available (e.g., when running as service)
                 time.sleep(1.0)
-
-    def _handle_telegram_message(self, chat_id: int, message: str) -> str:
-        """Handle incoming Telegram messages from authorized users.
-
-        This callback is invoked by the TelegramBot when a user sends a message.
-        It processes the message through the AI agent and returns the response.
-
-        Args:
-            chat_id: The Telegram chat ID of the sender
-            message: The message text from the user
-
-        Returns:
-            Response text to send back to the user
-        """
-        if self.config.no_ai:
-            return (
-                "AI is disabled in NO-AI mode. "
-                "Restart without --no-ai to enable commands."
-            )
-
-        logging.info(
-            "Processing Telegram request from %d: %s",
-            chat_id, message[:50]
-        )
-
-        # Build context with device states for the AI
-        device_states = {}
-        if self.device_tracker:
-            device_states = self.device_tracker.get_all_states()
-
-        # Create a focused prompt for the user's request
-        prompt = self._build_telegram_prompt(message, device_states)
-
-        # Use the AI agent to process the request synchronously
-        try:
-            response = self.ai.process_telegram_query(prompt, message)
-            return response
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logging.error("Error processing Telegram message: %s", e)
-            return f"❌ Error: {e}"
-
-    def _build_telegram_prompt(self, user_message: str, device_states: dict) -> str:
-        """Build a prompt for processing a Telegram user request.
-
-        Args:
-            user_message: The user's message/command
-            device_states: Current device states from the tracker
-
-        Returns:
-            Formatted prompt string for the AI
-        """
-        lines = [
-            "# User Request via Telegram",
-            "",
-            f"**User says:** {user_message}",
-            "",
-            "## Available Devices",
-        ]
-
-        if device_states:
-            for topic, state in sorted(device_states.items())[:30]:
-                # Compact state for token efficiency
-                state_copy = {k: v for k, v in state.items() if k != '_updated'}
-                state_str = json.dumps(state_copy, separators=(',', ':'))
-                if len(state_str) > 80:
-                    state_str = state_str[:77] + "..."
-                lines.append(f"- {topic}: {state_str}")
-        else:
-            lines.append("(No devices tracked yet)")
-
-        lines.extend([
-            "",
-            "## Instructions",
-            "Respond to the user's request. Use send_mqtt_message to control devices.",
-            "Keep responses concise for Telegram (max 200 chars unless detailed info requested).",
-            "Use device-friendly names when referring to devices.",
-        ])
-
-        return "\n".join(lines)
 
     def _shutdown(self):
         """Gracefully shutdown the daemon and its threads."""
