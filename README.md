@@ -1,16 +1,27 @@
 # MQTT2AI - Smart Home Automation with AI
 
-MQTT2AI is an intelligent home automation daemon that learns patterns from user behavior and creates automation rules using AI. It monitors MQTT messages from smart home devices and uses AI (via OpenAI-compatible APIs, Gemini, or Claude) to detect patterns and automate actions.
+MQTT2AI is an intelligent home automation daemon that connects AI agents to your smart home via MQTT. It monitors device messages, analyzes patterns, and enables AI to take autonomous actions—turning sensor events into intelligent responses.
+
+## How It Works
+
+The daemon sits between your MQTT broker (like Mosquitto with Zigbee2MQTT) and an AI provider. When a device publishes a state change, the system:
+
+1. **Collects** messages and tracks device states in memory
+2. **Analyzes** events to detect meaningful triggers (motion, door opens, button presses)
+3. **Checks** for existing automation rules—if found, executes instantly (~100ms)
+4. **Queries AI** for unrecognized patterns, allowing it to observe, learn, or act
+5. **Learns** from repeated behaviors—after 3+ observations of the same pattern, creates a rule
+
+The AI has access to tools for publishing MQTT commands, creating/managing rules, and raising security alerts. Rules execute on a fast path without AI involvement, keeping response times low.
 
 ## Features
 
-- **AI-Powered Analysis** - Supports multiple AI providers (Gemini, Claude, OpenAI-compatible)
-- **Pattern Learning** - Watches user behavior and learns automation rules
-- **Smart Triggers** - Filters noise and only triggers AI on significant events
-- **Tool Calling** - AI can directly publish MQTT messages and manage rules
-- **Zigbee2MQTT Integration** - Works with Zigbee devices via MQTT
-- **Undo Detection** - Automatically detects and rejects unwanted automations
-- **Fast Path Execution** - Learned rules execute instantly without AI involvement
+- **AI Tool Calling** - AI agents can publish MQTT messages, create rules, and raise alerts
+- **Fast Path Execution** - Learned rules execute instantly without AI latency
+- **Smart Triggers** - Filters noise and only invokes AI on meaningful state changes
+- **Multi-Provider Support** - Works with Gemini, Claude, and OpenAI-compatible APIs (Groq, Ollama, LM Studio)
+- **Zigbee2MQTT Integration** - Built for Zigbee devices but works with any MQTT source
+- **Simulation Mode** - Test scenarios with mock MQTT messages and assertions
 
 ---
 
