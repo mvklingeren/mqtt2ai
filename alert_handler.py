@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from config import Config
     from ai_agent import AiAgent
     from daemon import DeviceStateTracker
+    from telegram_bot import TelegramBot
 
 from tool_definitions import OPENAI_TOOLS
 
@@ -17,10 +18,20 @@ class AlertHandler:
     """Handles security alerts and coordinates AI responses."""
 
     def __init__(self, config: 'Config', ai_agent: 'AiAgent',
-                 device_tracker: Optional['DeviceStateTracker'] = None):
+                 device_tracker: Optional['DeviceStateTracker'] = None,
+                 telegram_bot: Optional['TelegramBot'] = None):
         self.config = config
         self.ai_agent = ai_agent
         self.device_tracker = device_tracker
+        self.telegram_bot = telegram_bot
+
+    def set_telegram_bot(self, telegram_bot: 'TelegramBot') -> None:
+        """Set the Telegram bot reference (for deferred initialization).
+
+        Args:
+            telegram_bot: The TelegramBot instance
+        """
+        self.telegram_bot = telegram_bot
 
     def raise_alert(self, severity: float, reason: str, context: dict = None) -> str:
         """Raise an alert with severity 0.0-1.0."""
@@ -47,11 +58,14 @@ class AlertHandler:
         if context:
             logging.debug("Alert context: %s", json.dumps(context))
 
+        # Send via Telegram if available
+        self._send_telegram_alert(severity, reason, context)
+
         # Low priority: just log
         if severity < 0.3:
             return f"Alert logged (severity {severity:.1f}): {reason}"
 
-        # Medium priority: send notification via MQTT
+        # Medium priority: send notification via MQTT and Telegram
         if severity < 0.7:
             notification = {
                 "severity": severity,
@@ -61,12 +75,12 @@ class AlertHandler:
                 "timestamp": datetime.now().isoformat()
             }
             try:
-                # Assuming tools.send_mqtt_message is accessible via ai_agent
-                # Or could be passed in init if alert_handler shouldn't directly access tools
+                # Send via MQTT
                 self.ai_agent.execute_tool_call(
                     "send_mqtt_message",
                     {"topic": "mqtt2ai/alerts", "payload": json.dumps(notification)}
                 )
+
                 return f"Alert notification sent (severity {severity:.1f}): {reason}"
             except Exception as e:  # pylint: disable=broad-exception-caught
                 logging.error("Failed to send alert notification: %s", e)
@@ -87,6 +101,9 @@ class AlertHandler:
             "%s[ALERT AI] Triggering async AI response for high-severity alert...%s",
             color, reset
         )
+
+        # Send Telegram notification for high-severity alerts
+        self._send_telegram_alert(severity, reason, context)
 
         # Execute AI call asynchronously to avoid blocking the main AI worker
         threading.Thread(
@@ -141,6 +158,29 @@ class AlertHandler:
         lines.append("Take action NOW to respond to this security alert.")
 
         return "\n".join(lines)
+
+    def _send_telegram_alert(
+        self,
+        severity: float,
+        reason: str,
+        context: Optional[dict] = None
+    ) -> None:
+        """Send an alert notification via Telegram.
+
+        Args:
+            severity: Alert severity (0.0-1.0)
+            reason: Alert description
+            context: Optional additional context
+        """
+        if not self.telegram_bot:
+            return
+
+        try:
+            count = self.telegram_bot.send_alert(severity, reason, context)
+            if count > 0:
+                logging.info("Telegram alert sent to %d chat(s)", count)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.warning("Failed to send Telegram alert: %s", e)
 
     def _execute_alert_ai_call(self, prompt: str) -> None:
         """Execute an AI call for alert response."""

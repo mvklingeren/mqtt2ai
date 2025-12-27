@@ -16,5 +16,8 @@ anthropic>=0.40.0
 # Environment variable management
 python-dotenv>=1.0.0
 
+# Telegram Bot integration
+python-telegram-bot>=21.0
+
 # Testing
 pytest>=7.4.0

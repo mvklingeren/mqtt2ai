@@ -30,3 +30,15 @@ class AiProvider(ABC):
     def get_alert_tool_declarations(self) -> list:
         """Get tool declarations for alert handling."""
         raise NotImplementedError
+
+    @abstractmethod
+    def execute_telegram_query(self, prompt: str) -> str:
+        """Execute a synchronous AI query for Telegram interaction.
+
+        Args:
+            prompt: The prompt with user request and device context
+
+        Returns:
+            Text response for the user
+        """
+        raise NotImplementedError

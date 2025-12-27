@@ -310,3 +310,108 @@ class OpenAiProvider(AiProvider):
 
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("Alert AI call failed: %s", e)
+
+    def execute_telegram_query(self, prompt: str) -> str:
+        """Execute a synchronous AI query for Telegram interaction.
+
+        Args:
+            prompt: The prompt with user request and device context
+
+        Returns:
+            Text response for the user
+        """
+        if not OPENAI_AVAILABLE or not self.client:
+            return "❌ OpenAI SDK not available"
+
+        try:
+            # Limited tools for Telegram - only send_mqtt_message
+            telegram_tools = [OPENAI_TOOLS[0]]  # send_mqtt_message
+
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful home automation assistant responding via Telegram. "
+                        "Be concise (under 200 chars when possible). "
+                        "Use send_mqtt_message to control devices when the user requests actions. "
+                        "Confirm actions briefly, e.g., '✅ Living room light turned ON'"
+                    )
+                },
+                {"role": "user", "content": prompt}
+            ]
+
+            current_model = self.config.get_next_model()
+            cyan, reset = "\033[96m", "\033[0m"
+            purple = "\033[95m"
+
+            # Allow up to 3 iterations for tool calls + final response
+            final_response = ""
+            actions_taken = []
+
+            for iteration in range(3):
+                response = self.client.chat.completions.create(
+                    model=current_model,
+                    messages=messages,
+                    tools=telegram_tools,
+                    tool_choice="auto",
+                )
+
+                message = response.choices[0].message
+
+                if message.tool_calls:
+                    # Process tool calls
+                    messages.append({
+                        "role": "assistant",
+                        "content": message.content,
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": tc.type,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                },
+                            }
+                            for tc in message.tool_calls
+                        ]
+                    })
+
+                    for tool_call in message.tool_calls:
+                        func_name = tool_call.function.name
+                        try:
+                            func_args = json.loads(tool_call.function.arguments)
+                        except json.JSONDecodeError:
+                            func_args = {}
+
+                        logging.info(
+                            "%s[Telegram Tool] %s(%s)%s",
+                            purple, func_name, json.dumps(func_args), reset
+                        )
+
+                        result = self.ai_agent.execute_tool_call(func_name, func_args)
+                        actions_taken.append(f"{func_name}: {result}")
+
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": result
+                        })
+                else:
+                    # No more tool calls, get the final response
+                    if message.content:
+                        final_response = message.content.strip()
+                    break
+
+            # If we have actions but no final response, summarize
+            if actions_taken and not final_response:
+                final_response = "✅ " + "; ".join(actions_taken)
+
+            if not final_response:
+                final_response = "I processed your request but have nothing to report."
+
+            logging.info("%sTelegram Response: %s%s", cyan, final_response[:100], reset)
+            return final_response
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.error("Telegram query failed: %s", e)
+            return f"❌ Error: {e}"
