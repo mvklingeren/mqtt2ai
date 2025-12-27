@@ -393,12 +393,14 @@ class TestMqttClientOnMessage:
         mock_msg = MagicMock()
         mock_msg.topic = "test/topic"
         mock_msg.payload = b'{"state": "ON"}'
+        mock_msg.retain = False
 
         client._on_message(mock_paho_client, None, mock_msg)
 
-        topic, payload = message_queue.get_nowait()
+        topic, payload, is_retained = message_queue.get_nowait()
         assert topic == "test/topic"
         assert payload == '{"state": "ON"}'
+        assert is_retained is False
 
     def test_on_message_decodes_utf8_payload(self, config, mock_paho_client):
         """Test that _on_message decodes UTF-8 payloads."""
@@ -409,10 +411,11 @@ class TestMqttClientOnMessage:
         mock_msg = MagicMock()
         mock_msg.topic = "test/topic"
         mock_msg.payload = "hellö wörld".encode("utf-8")
+        mock_msg.retain = False
 
         client._on_message(mock_paho_client, None, mock_msg)
 
-        _, payload = message_queue.get_nowait()
+        _, payload, _ = message_queue.get_nowait()
         assert payload == "hellö wörld"
 
     def test_on_message_handles_invalid_utf8(self, config, mock_paho_client):
@@ -424,13 +427,33 @@ class TestMqttClientOnMessage:
         mock_msg = MagicMock()
         mock_msg.topic = "test/topic"
         mock_msg.payload = b'\xff\xfe invalid'  # Invalid UTF-8 bytes
+        mock_msg.retain = False
 
         client._on_message(mock_paho_client, None, mock_msg)
 
         # Should not raise, message should be in queue with replacement chars
-        topic, payload = message_queue.get_nowait()
+        topic, payload, is_retained = message_queue.get_nowait()
         assert topic == "test/topic"
         assert payload  # Contains replacement characters
+        assert is_retained is False
+
+    def test_on_message_includes_retain_flag(self, config, mock_paho_client):
+        """Test that _on_message includes the retain flag in the queue tuple."""
+        client = MqttClient(config)
+        message_queue = queue.Queue()
+        client._message_queue = message_queue
+
+        # Test with retained message
+        mock_msg = MagicMock()
+        mock_msg.topic = "test/topic"
+        mock_msg.payload = b'{"state": "ON"}'
+        mock_msg.retain = True
+
+        client._on_message(mock_paho_client, None, mock_msg)
+
+        topic, payload, is_retained = message_queue.get_nowait()
+        assert topic == "test/topic"
+        assert is_retained is True
 
     def test_on_message_without_queue_logs_warning(self, config, mock_paho_client, caplog):
         """Test that _on_message logs warning if no queue configured."""

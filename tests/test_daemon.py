@@ -226,6 +226,37 @@ class TestMqttAiDaemonMessageDeque:
         assert "msg 2" in snapshot
         assert "msg 3" in snapshot
 
+    def test_filtered_snapshot_excludes_retained_messages(self, config_with_temp_files):
+        """Test that _create_filtered_snapshot excludes [RETAINED] prefixed messages."""
+        daemon = MqttAiDaemon(config_with_temp_files)
+
+        with daemon.lock:
+            # Mix of retained and normal messages
+            daemon.messages_deque.append("[RETAINED] [12:00:00] zigbee2mqtt/sensor1 {}")
+            daemon.messages_deque.append("[RETAINED] [12:00:01] zigbee2mqtt/sensor2 {}")
+            daemon.messages_deque.append("[12:00:05] zigbee2mqtt/sensor3 {}")
+            daemon.messages_deque.append("[12:00:06] zigbee2mqtt/sensor4 {}")
+            snapshot = daemon._create_filtered_snapshot()
+
+        # Retained messages should be excluded
+        assert "[RETAINED]" not in snapshot
+        assert "sensor1" not in snapshot
+        assert "sensor2" not in snapshot
+        # Normal messages should be included
+        assert "sensor3" in snapshot
+        assert "sensor4" in snapshot
+
+    def test_filtered_snapshot_returns_empty_when_only_retained(self, config_with_temp_files):
+        """Test that filtered snapshot is empty when only retained messages exist."""
+        daemon = MqttAiDaemon(config_with_temp_files)
+
+        with daemon.lock:
+            daemon.messages_deque.append("[RETAINED] [12:00:00] zigbee2mqtt/sensor1 {}")
+            daemon.messages_deque.append("[RETAINED] [12:00:01] zigbee2mqtt/sensor2 {}")
+            snapshot = daemon._create_filtered_snapshot()
+
+        assert snapshot == ""
+
 
 class TestMqttAiDaemonTriggerAnalyzer:
     """Tests for trigger analyzer integration."""

@@ -418,7 +418,8 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         self._last_queued_trigger: Optional[tuple[str, str]] = None  # (topic, field)
 
         # Queue for receiving MQTT messages from paho-mqtt subscription
-        self.mqtt_message_queue: queue.Queue[tuple[str, str]] = queue.Queue()
+        # Tuple format: (topic, payload, is_retained)
+        self.mqtt_message_queue: queue.Queue[tuple[str, str, bool]] = queue.Queue()
 
     def start(self):
         """Start the daemon."""
@@ -532,12 +533,9 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                         trigger_result, _ = self.trigger_queue.get_nowait()
                         reason = "smart_trigger"
 
-                        # Get snapshot for this trigger
-                        # Note: This gives current snapshot, which might include
-                        # messages after trigger
-                        # For now this is acceptable as AI needs context
+                        # Get snapshot for this trigger, excluding init messages
                         with self.lock:
-                            snapshot = "\n".join(list(self.messages_deque))
+                            snapshot = self._create_filtered_snapshot()
 
                         if snapshot:
                             self._handle_ai_check(snapshot, reason, trigger_result)
@@ -556,7 +554,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                     )
 
                     with self.lock:
-                        snapshot = "\n".join(list(self.messages_deque))
+                        snapshot = self._create_filtered_snapshot()
                         self.new_message_count = 0
                         last_check_time = time.time()
 
@@ -582,6 +580,21 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         if should_check_count:
             return f"message_count ({self.config.ai_check_threshold})"
         return f"interval ({self.config.ai_check_interval}s)"
+
+    def _create_filtered_snapshot(self) -> str:
+        """Create a snapshot excluding retained messages.
+
+        Retained MQTT messages (stored by the broker and delivered upon
+        subscription) are marked with [RETAINED] prefix and excluded from
+        AI analysis since they represent historical state, not new events.
+
+        Must be called while holding self.lock.
+        """
+        filtered_lines = [
+            line for line in self.messages_deque
+            if not line.startswith("[RETAINED]")
+        ]
+        return "\n".join(filtered_lines)
 
     def _keyboard_input_loop(self):
         """Background thread that listens for Enter key to trigger manual AI check."""
@@ -746,7 +759,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             while self.running:
                 # Get message from queue with timeout to allow checking self.running
                 try:
-                    current_topic, current_payload = self.mqtt_message_queue.get(
+                    current_topic, current_payload, is_retained = self.mqtt_message_queue.get(
                         timeout=1.0
                     )
                 except queue.Empty:
@@ -805,9 +818,16 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 # 5. Update device tracker
                 self.device_tracker.update(current_topic, current_payload)
 
-                # 6. Store
+                # 6. Store with [RETAINED] prefix for retained messages
+                # Retained messages represent historical state, not new events,
+                # and are excluded from AI analysis snapshots
+                if is_retained:
+                    msg_prefix = "[RETAINED] "
+                else:
+                    msg_prefix = ""
+
                 with self.lock:
-                    self.messages_deque.append(f"{timestamp()} {line}")
+                    self.messages_deque.append(f"{msg_prefix}{timestamp()} {line}")
                     self.new_message_count += 1
 
         except Exception as e:  # pylint: disable=broad-exception-caught

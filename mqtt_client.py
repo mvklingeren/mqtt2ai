@@ -131,8 +131,9 @@ class MqttClient:
     ):
         """Callback when a message is received on a subscribed topic.
 
-        Puts the message (topic, payload) tuple into the message queue
-        for processing by the daemon.
+        Puts the message (topic, payload, is_retained) tuple into the message queue
+        for processing by the daemon. Retained messages are flagged so they can
+        be excluded from AI analysis (they represent historical state, not new events).
         """
         if self._message_queue is None:
             logging.warning("Received message but no queue configured")
@@ -140,7 +141,8 @@ class MqttClient:
 
         try:
             payload = msg.payload.decode("utf-8", errors="replace")
-            self._message_queue.put((msg.topic, payload))
+            # Include retain flag so daemon can filter retained messages from AI
+            self._message_queue.put((msg.topic, payload, msg.retain))
         except Exception as e:
             logging.error("Error processing received message: %s", e)
 
