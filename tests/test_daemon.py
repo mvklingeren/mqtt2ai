@@ -152,33 +152,34 @@ class TestMqttAiDaemonDetermineTriggerReason:
         assert str(config_with_temp_files.ai_check_interval) in reason
 
 
-class TestMqttAiDaemonHandleAiCheck:
-    """Tests for _handle_ai_check method."""
+class TestMqttAiDaemonAiOrchestrator:
+    """Tests for AI orchestrator integration."""
 
-    def test_handle_ai_check_no_ai_mode(self, config_with_temp_files):
-        """Test that no-AI mode logs but doesn't call AI."""
+    def test_ai_orchestrator_created(self, config_with_temp_files):
+        """Test that AI orchestrator is created."""
+        daemon = MqttAiDaemon(config_with_temp_files)
+        assert daemon.ai_orchestrator is not None
+
+    def test_ai_orchestrator_no_ai_mode(self, config_with_temp_files):
+        """Test that no-AI mode is passed to orchestrator."""
         config_with_temp_files.no_ai = True
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        with patch.object(daemon.ai, "run_analysis") as mock_run:
-            daemon._handle_ai_check("test snapshot", "test reason")
-            mock_run.assert_not_called()
+        assert daemon.ai_orchestrator.no_ai is True
 
-    def test_handle_ai_check_queues_request(self, config_with_temp_files):
-        """Test that AI request is queued in normal mode."""
+    def test_ai_orchestrator_queues_request(self, config_with_temp_files):
+        """Test that AI request is queued via orchestrator."""
         config_with_temp_files.no_ai = False
         daemon = MqttAiDaemon(config_with_temp_files)
 
         # Ensure queue is empty
-        assert daemon.ai_queue.empty()
+        assert daemon.ai_orchestrator.queue_size() == 0
 
-        daemon._handle_ai_check("test snapshot", "test reason")
+        result = daemon.ai_orchestrator.queue_request("test snapshot", "test reason")
 
         # Request should be queued
-        assert not daemon.ai_queue.empty()
-        request = daemon.ai_queue.get_nowait()
-        assert request.snapshot == "test snapshot"
-        assert request.reason == "test reason"
+        assert result is True
+        assert daemon.ai_orchestrator.queue_size() == 1
 
 
 
@@ -274,11 +275,16 @@ class TestMqttAiDaemonTriggerAnalyzer:
         assert "config" in stats
 
 
-class TestMqttAiDaemonPrintTrigger:
-    """Tests for _print_trigger method."""
+class TestMqttAiDaemonCollector:
+    """Tests for collector integration."""
 
-    def test_print_trigger_outputs_correctly(self, config_with_temp_files, capsys):
-        """Test that trigger prints correctly."""
+    def test_collector_created(self, config_with_temp_files):
+        """Test that collector is created."""
+        daemon = MqttAiDaemon(config_with_temp_files)
+        assert daemon.collector is not None
+
+    def test_on_trigger_queues_trigger(self, config_with_temp_files):
+        """Test that _on_trigger adds to trigger queue."""
         daemon = MqttAiDaemon(config_with_temp_files)
 
         # Create a mock trigger result
@@ -288,12 +294,15 @@ class TestMqttAiDaemonPrintTrigger:
             field_name = "occupancy"
             old_value = False
             new_value = True
+            topic = "zigbee2mqtt/pir"
 
-        daemon._print_trigger(MockTriggerResult(), "zigbee2mqtt/pir {\"occupancy\": true}")
-
-        captured = capsys.readouterr()
-        assert "SMART TRIGGER" in captured.out
-        assert "occupancy" in captured.out
+        assert daemon.trigger_queue.empty()
+        daemon._on_trigger(MockTriggerResult(), 12345.0)
+        
+        assert not daemon.trigger_queue.empty()
+        result, ts = daemon.trigger_queue.get_nowait()
+        assert result.field_name == "occupancy"
+        assert ts == 12345.0
 
 
 class TestMqttAiDaemonEventSystem:
