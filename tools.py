@@ -23,6 +23,20 @@ REJECTED_PATTERNS_FILE = "rejected_patterns.json"
 # TODO: Move this to RuntimeContext or Config
 _DISABLE_NEW_RULES = False
 
+# Module-level reference to Telegram bot (set by daemon)
+_TELEGRAM_BOT = None
+
+
+def set_telegram_bot(telegram_bot) -> None:
+    """Set the Telegram bot reference for sending messages.
+
+    Args:
+        telegram_bot: The TelegramBot instance
+    """
+    global _TELEGRAM_BOT
+    _TELEGRAM_BOT = telegram_bot
+
+
 def set_disable_new_rules(disable: bool) -> None:
     """Set whether new rules should be disabled by default.
 
@@ -66,6 +80,31 @@ def send_mqtt_message(
     if client and client.publish(topic, payload):
         return f"Successfully sent message to topic '{topic}'"
     return "Error: Failed to send MQTT message. Check connection to broker."
+
+
+def send_telegram_message(message: str) -> str:
+    """Send a message to all authorized Telegram users.
+
+    Use this to notify users about important events, confirmations,
+    or status updates. The message will be sent to all configured
+    Telegram chat IDs.
+
+    Args:
+        message: The message text to send (Markdown supported)
+
+    Returns:
+        A confirmation message indicating success or failure
+    """
+    if not _TELEGRAM_BOT:
+        return "Error: Telegram bot not configured or not running"
+
+    try:
+        count = _TELEGRAM_BOT.broadcast_message(message)
+        if count > 0:
+            return f"Successfully sent Telegram message to {count} user(s)"
+        return "Error: No Telegram messages sent (no authorized chats)"
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        return f"Error sending Telegram message: {e}"
 
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals

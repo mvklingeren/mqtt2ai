@@ -126,6 +126,17 @@ class Config:  # pylint: disable=too-many-instance-attributes
     debug_output: bool = False
     debug_output_dir: str = "debug-output"
 
+    # Telegram Bot integration
+    telegram_bot_token: str = field(
+        default_factory=lambda: os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    )
+    telegram_chat_ids: str = field(
+        default_factory=lambda: os.environ.get("TELEGRAM_CHAT_IDS", "")
+    )
+    telegram_enabled: bool = field(
+        default_factory=lambda: bool(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
+    )
+
     @classmethod
     def from_args(cls) -> 'Config':
         """Parse command-line arguments and return a Config instance."""
@@ -263,6 +274,23 @@ class Config:  # pylint: disable=too-many-instance-attributes
             help="Disable message count-based AI triggers (threshold checks)"
         )
 
+        # Telegram Bot integration
+        parser.add_argument(
+            "--telegram-token",
+            default=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+            help="Telegram Bot token from BotFather (env: TELEGRAM_BOT_TOKEN)"
+        )
+        parser.add_argument(
+            "--telegram-chat-ids",
+            default=os.environ.get("TELEGRAM_CHAT_IDS", ""),
+            help="Comma-separated list of authorized Telegram chat IDs (env: TELEGRAM_CHAT_IDS)"
+        )
+        parser.add_argument(
+            "--no-telegram",
+            action="store_true",
+            help="Disable Telegram bot even if token is configured"
+        )
+
         args = parser.parse_args()
 
         c = cls()
@@ -292,4 +320,9 @@ class Config:  # pylint: disable=too-many-instance-attributes
         c.debug_output = args.debug
         c.disable_interval_trigger = args.disable_interval_trigger
         c.disable_threshold_trigger = args.disable_threshold_trigger
+
+        # Telegram configuration
+        c.telegram_bot_token = args.telegram_token
+        c.telegram_chat_ids = args.telegram_chat_ids
+        c.telegram_enabled = bool(args.telegram_token) and not args.no_telegram
         return c

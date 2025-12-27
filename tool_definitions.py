@@ -265,6 +265,30 @@ OPENAI_TOOLS = [
                 "required": ["severity", "reason"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_telegram_message",
+            "description": (
+                "Send a message to all authorized Telegram users. "
+                "Use for important notifications, confirmations, or status updates. "
+                "Supports Markdown formatting."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": (
+                            "The message text to send. Supports Markdown formatting. "
+                            "Example: '*Alert*: Motion detected in living room'"
+                        )
+                    }
+                },
+                "required": ["message"]
+            }
+        }
     }
 ]
 

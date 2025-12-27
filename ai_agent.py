@@ -69,6 +69,14 @@ class AiAgent:
         self.alert_handler = AlertHandler(config, self, device_tracker)
         self.ai_provider_instance = self._initialize_ai_provider()
 
+    def set_telegram_bot(self, telegram_bot) -> None:
+        """Set the Telegram bot reference for alert notifications.
+
+        Args:
+            telegram_bot: The TelegramBot instance
+        """
+        self.alert_handler.set_telegram_bot(telegram_bot)
+
     def _initialize_ai_provider(self):
         """Initialize the appropriate AI provider based on configuration."""
         if self.config.ai_provider == "openai-compatible":
@@ -191,6 +199,9 @@ class AiAgent:
             "raise_alert": lambda args: self.alert_handler.raise_alert(
                 args["severity"], args["reason"], args.get("context")
             ),
+            "send_telegram_message": lambda args: tools.send_telegram_message(
+                args["message"]
+            ),
         }
 
         if tool_name in tool_map:
@@ -200,10 +211,35 @@ class AiAgent:
                 return f"Error executing {tool_name}: {e}"
         return f"Unknown tool: {tool_name}"
 
-    
+    def process_telegram_query(self, prompt: str, user_message: str) -> str:
+        """Process a Telegram user query through the AI.
 
+        This is a synchronous call that processes the user's request and
+        returns a text response suitable for sending back via Telegram.
 
+        Args:
+            prompt: The full prompt with device context
+            user_message: The original user message (for logging)
 
+        Returns:
+            Response text for the user
+        """
+        cyan, reset = "\033[96m", "\033[0m"
+        provider = self.config.ai_provider.upper()
+        logging.info(
+            "%s--- Telegram Query [%s] ---%s",
+            cyan, provider, reset
+        )
+
+        if not self.ai_provider_instance:
+            return "❌ AI provider not configured"
+
+        try:
+            response = self.ai_provider_instance.execute_telegram_query(prompt)
+            return response
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.error("Error in Telegram query: %s", e)
+            return f"❌ Error processing request: {e}"
 
 
 

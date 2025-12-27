@@ -203,3 +203,97 @@ class GeminiProvider(AiProvider):
 
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("Alert AI call failed: %s", e)
+
+    def execute_telegram_query(self, prompt: str) -> str:
+        """Execute a synchronous AI query for Telegram interaction.
+
+        Args:
+            prompt: The prompt with user request and device context
+
+        Returns:
+            Text response for the user
+        """
+        if not GEMINI_AVAILABLE or not self.client:
+            return "❌ Gemini SDK not available"
+
+        try:
+            cyan, reset = "\033[96m", "\033[0m"
+            purple = "\033[95m"
+
+            # Get send_mqtt_message tool only
+            telegram_tools = self.get_alert_tool_declarations()
+
+            system_instruction = (
+                "You are a helpful home automation assistant responding via Telegram. "
+                "Be concise (under 200 chars when possible). "
+                "Use send_mqtt_message to control devices when the user requests actions. "
+                "Confirm actions briefly, e.g., '✅ Living room light turned ON'"
+            )
+
+            config = types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                tools=telegram_tools,
+            )
+
+            contents = [prompt]
+            actions_taken = []
+            final_response = ""
+
+            # Allow up to 3 iterations for tool calls
+            for _ in range(3):
+                response = self.client.models.generate_content(
+                    model=self.config.gemini_model,
+                    contents=contents,
+                    config=config,
+                )
+
+                if response.candidates and response.candidates[0].content.parts:
+                    has_function_call = False
+                    for part in response.candidates[0].content.parts:
+                        if part.function_call:
+                            has_function_call = True
+                            func_name = part.function_call.name
+                            func_args = (
+                                dict(part.function_call.args)
+                                if part.function_call.args else {}
+                            )
+
+                            logging.info(
+                                "%s[Telegram Tool] %s(%s)%s",
+                                purple, func_name, json.dumps(func_args), reset
+                            )
+
+                            result = self.ai_agent.execute_tool_call(func_name, func_args)
+                            actions_taken.append(f"{func_name}: {result}")
+
+                            contents.append(response.candidates[0].content)
+                            contents.append(
+                                types.Content(
+                                    role="user",
+                                    parts=[types.Part.from_function_response(
+                                        name=func_name,
+                                        response={"result": result}
+                                    )]
+                                )
+                            )
+
+                    if not has_function_call:
+                        if response.text:
+                            final_response = response.text.strip()
+                        break
+                else:
+                    break
+
+            # If we have actions but no final response, summarize
+            if actions_taken and not final_response:
+                final_response = "✅ " + "; ".join(actions_taken)
+
+            if not final_response:
+                final_response = "I processed your request but have nothing to report."
+
+            logging.info("%sTelegram Response: %s%s", cyan, final_response[:100], reset)
+            return final_response
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.error("Telegram query failed: %s", e)
+            return f"❌ Error: {e}"

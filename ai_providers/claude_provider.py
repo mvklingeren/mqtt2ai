@@ -185,3 +185,91 @@ class ClaudeProvider(AiProvider):
 
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("Alert AI call failed: %s", e)
+
+    def execute_telegram_query(self, prompt: str) -> str:
+        """Execute a synchronous AI query for Telegram interaction.
+
+        Args:
+            prompt: The prompt with user request and device context
+
+        Returns:
+            Text response for the user
+        """
+        if not ANTHROPIC_AVAILABLE or not self.client:
+            return "❌ Anthropic SDK not available"
+
+        try:
+            cyan, reset = "\033[96m", "\033[0m"
+            purple = "\033[95m"
+
+            telegram_tools = self.get_alert_tool_declarations()
+
+            system_prompt = (
+                "You are a helpful home automation assistant responding via Telegram. "
+                "Be concise (under 200 chars when possible). "
+                "Use send_mqtt_message to control devices when the user requests actions. "
+                "Confirm actions briefly, e.g., '✅ Living room light turned ON'"
+            )
+
+            messages = [{"role": "user", "content": prompt}]
+            actions_taken = []
+            final_response = ""
+
+            # Allow up to 3 iterations for tool calls
+            for _ in range(3):
+                response = self.client.messages.create(
+                    model=self.config.claude_model,
+                    max_tokens=512,
+                    system=system_prompt,
+                    tools=telegram_tools,
+                    messages=messages,
+                )
+
+                has_tool_use = False
+                tool_results = []
+
+                for block in response.content:
+                    if block.type == "tool_use":
+                        has_tool_use = True
+                        func_name = block.name
+                        func_args = block.input if block.input else {}
+
+                        logging.info(
+                            "%s[Telegram Tool] %s(%s)%s",
+                            purple, func_name, json.dumps(func_args), reset
+                        )
+
+                        result = self.ai_agent.execute_tool_call(func_name, func_args)
+                        actions_taken.append(f"{func_name}: {result}")
+
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result
+                        })
+
+                    elif block.type == "text" and block.text:
+                        final_response = block.text.strip()
+
+                if has_tool_use:
+                    messages.append({"role": "assistant", "content": response.content})
+                    messages.append({"role": "user", "content": tool_results})
+                else:
+                    break
+
+                if response.stop_reason == "end_turn":
+                    break
+
+            # If we have actions but no final response, summarize
+            if actions_taken and not final_response:
+                final_response = "✅ " + "; ".join(actions_taken)
+
+            if not final_response:
+                final_response = "I processed your request but have nothing to report."
+
+            logging.info("%sTelegram Response: %s%s", cyan, final_response[:100], reset)
+            return final_response
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.error("Telegram query failed: %s", e)
+            return f"❌ Error: {e}"
