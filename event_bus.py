@@ -93,3 +93,4 @@ class EventBus:
 # Global instance for easy access across modules
 event_bus = EventBus()
 
+

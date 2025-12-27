@@ -222,3 +222,4 @@ class TestKnowledgeBaseEmptyStructures:
         assert "patterns" in kb.rejected_patterns
         assert isinstance(kb.rejected_patterns["patterns"], list)
 
+

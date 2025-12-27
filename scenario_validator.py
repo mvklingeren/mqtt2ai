@@ -358,3 +358,4 @@ def write_json_report(results: List[AssertionResult],
     
     logging.info("Test report written to %s", output_path)
 
+

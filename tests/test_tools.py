@@ -10,15 +10,6 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-@pytest.fixture(autouse=True)
-def mock_mqtt_client():
-    """Mock the MQTT client used by tools module."""
-    mock_client = MagicMock()
-    mock_client.publish.return_value = True
-    
-    # Patch the module-level _mqtt_client
-    with patch("tools._mqtt_client", mock_client):
-        yield mock_client
 
 
 # Import the functions we want to test (after setting up mocks)
@@ -38,8 +29,6 @@ from tools import (
     _clear_pending_pattern,
     _is_pattern_rejected,
     _add_rejected_pattern,
-    set_mqtt_client,
-    set_disable_new_rules,
     LEARNED_RULES_FILE,
     PENDING_PATTERNS_FILE,
     REJECTED_PATTERNS_FILE,
@@ -65,38 +54,50 @@ def mock_files(temp_dir, monkeypatch):
     }
 
 
+# Mock RuntimeContext for tests
+class MockRuntimeContext:
+    def __init__(self, mqtt_client_mock):
+        self.mqtt_client = mqtt_client_mock
+        self.device_tracker = MagicMock() # Device tracker not directly used by tools here
+
+@pytest.fixture
+def mock_context():
+    """Provides a mock RuntimeContext for tool functions."""
+    mock_client = MagicMock()
+    mock_client.publish.return_value = True
+    return MockRuntimeContext(mock_client)
+
+
 class TestSendMqttMessage:
     """Tests for send_mqtt_message function."""
 
-    def test_send_mqtt_message_success(self, mock_mqtt_client):
-        """Test successful MQTT message send."""
-        mock_mqtt_client.publish.return_value = True
-        result = send_mqtt_message("test/topic", '{"state": "ON"}')
+    def test_send_mqtt_message_success(self, mock_context):
+        mock_context.mqtt_client.publish.return_value = True
+        result = send_mqtt_message("test/topic", '{"state": "ON"}', context=mock_context)
 
         assert "Successfully" in result
-        mock_mqtt_client.publish.assert_called_once()
+        mock_context.mqtt_client.publish.assert_called_once()
 
-    def test_send_mqtt_message_correct_topic(self, mock_mqtt_client):
+    def test_send_mqtt_message_correct_topic(self, mock_context):
         """Test that correct topic is used."""
-        mock_mqtt_client.publish.return_value = True
-        send_mqtt_message("zigbee2mqtt/light/set", '{"state": "ON"}')
-
-        call_args = mock_mqtt_client.publish.call_args[0]
+        mock_context.mqtt_client.publish.return_value = True
+        send_mqtt_message("zigbee2mqtt/light/set", '{"state": "ON"}', context=mock_context)
+        call_args = mock_context.mqtt_client.publish.call_args[0]
         assert call_args[0] == "zigbee2mqtt/light/set"
 
-    def test_send_mqtt_message_correct_payload(self, mock_mqtt_client):
+    def test_send_mqtt_message_correct_payload(self, mock_context):
         """Test that correct payload is used."""
-        mock_mqtt_client.publish.return_value = True
+        mock_context.mqtt_client.publish.return_value = True
         payload = '{"state": "ON", "brightness": 100}'
-        send_mqtt_message("test/topic", payload)
+        send_mqtt_message("test/topic", payload, context=mock_context)
 
-        call_args = mock_mqtt_client.publish.call_args[0]
+        call_args = mock_context.mqtt_client.publish.call_args[0]
         assert call_args[1] == payload
 
-    def test_send_mqtt_message_failure(self, mock_mqtt_client):
+    def test_send_mqtt_message_failure(self, mock_context):
         """Test handling when publish fails."""
-        mock_mqtt_client.publish.return_value = False
-        result = send_mqtt_message("test/topic", '{"state": "ON"}')
+        mock_context.mqtt_client.publish.return_value = False
+        result = send_mqtt_message("test/topic", '{"state": "ON"}', context=mock_context)
 
         assert "Error" in result or "Failed" in result
 
@@ -699,30 +700,4 @@ class TestHelperFunctions:
         assert len(data["patterns"]) == 1
         assert data["patterns"][0]["trigger_topic"] == "zigbee2mqtt/pir_b"
 
-
-class TestSetMqttClient:
-    """Tests for set_mqtt_client function."""
-
-    def test_set_mqtt_client(self):
-        """Test that set_mqtt_client properly sets the client."""
-        mock_client = MagicMock()
-        set_mqtt_client(mock_client)
-        
-        # Import the module-level variable to check it was set
-        import tools
-        assert tools._mqtt_client == mock_client
-
-
-class TestSetDisableNewRules:
-    """Tests for set_disable_new_rules function."""
-
-    def test_set_disable_new_rules(self):
-        """Test that set_disable_new_rules properly sets the flag."""
-        set_disable_new_rules(True)
-        
-        import tools
-        assert tools._disable_new_rules is True
-        
-        set_disable_new_rules(False)
-        assert tools._disable_new_rules is False
 

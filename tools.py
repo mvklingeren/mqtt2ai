@@ -2,7 +2,7 @@
 
 This module provides pure tool functions that can be called by any AI provider
 (OpenAI, Gemini, Claude) through their function calling / tool use APIs.
-The MqttClient dependency can be injected via RuntimeContext or legacy setters.
+The MqttClient dependency can be injected via RuntimeContext.
 """
 
 import json
@@ -19,25 +19,9 @@ LEARNED_RULES_FILE = "learned_rules.json"
 PENDING_PATTERNS_FILE = "pending_patterns.json"
 REJECTED_PATTERNS_FILE = "rejected_patterns.json"
 
-# Module-level MQTT client (injected by daemon at startup)
-# Kept for backward compatibility - prefer using RuntimeContext
-_mqtt_client = None
-
 # Module-level config for disable_new_rules setting
+# TODO: Move this to RuntimeContext or Config
 _disable_new_rules = False
-
-
-def set_mqtt_client(client) -> None:
-    """Set the MQTT client used by tools.
-    
-    Note: This is kept for backward compatibility. Prefer using RuntimeContext.
-    
-    Args:
-        client: MqttClient instance for publishing messages
-    """
-    global _mqtt_client
-    _mqtt_client = client
-
 
 def set_disable_new_rules(disable: bool) -> None:
     """Set whether new rules should be disabled by default.
@@ -50,7 +34,7 @@ def set_disable_new_rules(disable: bool) -> None:
 
 
 def _get_mqtt_client(context: Optional['RuntimeContext'] = None):
-    """Get the MQTT client from context or fallback to module-level global.
+    """Get the MQTT client from context.
     
     Args:
         context: Optional RuntimeContext with mqtt_client
@@ -60,7 +44,7 @@ def _get_mqtt_client(context: Optional['RuntimeContext'] = None):
     """
     if context and context.mqtt_client:
         return context.mqtt_client
-    return _mqtt_client
+    return None
 
 
 def send_mqtt_message(
@@ -558,4 +542,3 @@ def report_undo(rule_id: str) -> str:
             return f"Undo count for '{rule_id}' is now {count}/3"
 
     return f"Rule '{rule_id}' not found"
-

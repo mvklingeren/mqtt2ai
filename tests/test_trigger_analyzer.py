@@ -440,3 +440,4 @@ class TestTriggerAnalyzerStateUpdate:
         topic_state = analyzer.topic_states["zigbee2mqtt/sensor"]
         assert topic_state.state_fields["contact"] is True
 
+

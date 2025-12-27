@@ -180,52 +180,8 @@ class TestMqttAiDaemonHandleAiCheck:
         assert request.snapshot == "test snapshot"
         assert request.reason == "test reason"
 
-    def test_handle_ai_check_queues_even_when_busy(self, config_with_temp_files):
-        """Test that requests are queued even when AI is busy.
-        
-        Note: The busy check now happens in _main_loop before calling
-        _handle_ai_check. This allows accumulated triggers to be processed
-        once AI becomes free, preventing event loss during bursts.
-        """
-        config_with_temp_files.no_ai = False
-        daemon = MqttAiDaemon(config_with_temp_files)
 
-        # Simulate AI being busy
-        daemon.ai_busy.set()
 
-        daemon._handle_ai_check("test snapshot", "test reason")
-
-        # Request should still be queued (busy check is in _main_loop now)
-        assert not daemon.ai_queue.empty()
-        request = daemon.ai_queue.get_nowait()
-        assert request.snapshot == "test snapshot"
-
-    def test_pending_triggers_accumulate_when_not_drained(self, config_with_temp_files):
-        """Test that pending triggers can accumulate in the deque."""
-        from trigger_analyzer import TriggerResult
-        
-        daemon = MqttAiDaemon(config_with_temp_files)
-        
-        # Simulate adding multiple trigger results
-        trigger1 = TriggerResult(
-            should_trigger=True,
-            reason="motion",
-            topic="zigbee2mqtt/pir1",
-            field_name="occupancy"
-        )
-        trigger2 = TriggerResult(
-            should_trigger=True,
-            reason="door",
-            topic="zigbee2mqtt/door1",
-            field_name="contact"
-        )
-        
-        with daemon.trigger_results_lock:
-            daemon.pending_trigger_results.append(trigger1)
-            daemon.pending_trigger_results.append(trigger2)
-        
-        # Both should be in the deque
-        assert len(daemon.pending_trigger_results) == 2
 
 
 class TestMqttAiDaemonMessageDeque:
