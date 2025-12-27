@@ -24,12 +24,14 @@ from event_bus import event_bus, EventType
 from utils import write_debug_output
 
 
+from context import RuntimeContext
 from config import Config
 from knowledge_base import KnowledgeBase
 from prompt_builder import PromptBuilder
 
 if TYPE_CHECKING:
     from daemon import DeviceStateTracker
+    from mqtt_client import MqttClient
 
 
 
@@ -57,10 +59,12 @@ class AiAgent:
         config: Config,
         event_bus: 'EventBus',
         device_tracker: Optional['DeviceStateTracker'] = None,
+        mqtt_client: Optional['MqttClient'] = None,
     ):
         self.config = config
         self.event_bus = event_bus
         self.device_tracker = device_tracker
+        self.mqtt_client = mqtt_client
         self.prompt_builder = PromptBuilder(config)
         self.alert_handler = AlertHandler(config, self, device_tracker)
         self.ai_provider_instance = self._initialize_ai_provider()
@@ -135,7 +139,8 @@ class AiAgent:
 
         announce_topic = "mqtt2ai/action/announce"
         try:
-            tools.send_mqtt_message(announce_topic, json.dumps(announcement), context=self.event_bus)
+            ctx = RuntimeContext(mqtt_client=self.mqtt_client)
+            tools.send_mqtt_message(announce_topic, json.dumps(announcement), context=ctx)
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.warning("Failed to publish AI action announcement: %s", e)
 
@@ -158,7 +163,8 @@ class AiAgent:
                 self._announce_ai_action(topic, payload)
 
             try:
-                return tools.send_mqtt_message(topic, payload, context=self.event_bus)
+                ctx = RuntimeContext(mqtt_client=self.mqtt_client)
+                return tools.send_mqtt_message(topic, payload, context=ctx)
             except Exception as e:  # pylint: disable=broad-exception-caught
                 return f"Error executing {tool_name}: {e}"
 

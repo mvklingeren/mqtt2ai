@@ -372,8 +372,13 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         # Device state tracker for alert system context
         self.device_tracker = DeviceStateTracker(config.device_track_pattern)
 
-        # Initialize AI agent with event_bus
-        self.ai = AiAgent(config, event_bus=event_bus, device_tracker=self.device_tracker)
+        # Initialize AI agent with event_bus and mqtt_client
+        self.ai = AiAgent(
+            config,
+            event_bus=event_bus,
+            device_tracker=self.device_tracker,
+            mqtt_client=self.mqtt
+        )
 
         # In simulation mode, disable cooldown to allow rapid triggering
         self.trigger_analyzer = TriggerAnalyzer(
