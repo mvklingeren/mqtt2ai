@@ -152,25 +152,13 @@ class TelegramBot:
         """Stop the Telegram bot gracefully."""
         self._running = False
 
-        if self._loop and self._application:
-            # Schedule stop on the event loop
-            asyncio.run_coroutine_threadsafe(
-                self._stop_application(),
-                self._loop
-            )
-
+        # Just wait for the thread to stop - it handles its own cleanup
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=5.0)
+            self._thread.join(timeout=10.0)
             if self._thread.is_alive():
                 logging.warning("Telegram bot thread did not stop in time")
 
         logging.info("Telegram bot stopped")
-
-    async def _stop_application(self) -> None:
-        """Stop the application from within the event loop."""
-        if self._application:
-            await self._application.stop()
-            await self._application.shutdown()
 
     def _run_bot(self) -> None:
         """Run the bot in a new event loop (called from background thread)."""
@@ -229,7 +217,24 @@ class TelegramBot:
             # Process outgoing message queue
             await self._process_outgoing_queue()
 
-        await self._application.updater.stop()
+        # Graceful shutdown in correct order:
+        # 1. Stop updater (stops polling for updates)
+        # 2. Stop application (stops handlers)
+        # 3. Shutdown application (closes HTTP client)
+        try:
+            await self._application.updater.stop()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.debug("Updater stop error (expected during shutdown): %s", e)
+        
+        try:
+            await self._application.stop()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.debug("Application stop error: %s", e)
+        
+        try:
+            await self._application.shutdown()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.debug("Application shutdown error: %s", e)
 
     async def _process_outgoing_queue(self) -> None:
         """Process queued outgoing messages."""
