@@ -7,7 +7,7 @@ calling / tool use APIs. Dependencies are injected via RuntimeContext.
 
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from mqtt2ai.core.utils import load_json_file, save_json_file
 
@@ -345,55 +345,8 @@ class ToolHandler:
 
 
 # =============================================================================
-# Standalone functions (for backward compatibility and stateless operations)
+# Helper functions (stateless operations on files)
 # =============================================================================
-
-def send_mqtt_message(
-    topic: str,
-    payload: str,
-    context: Optional['RuntimeContext'] = None
-) -> str:
-    """Send a message to an MQTT topic.
-
-    Args:
-        topic: The MQTT topic to publish to (e.g., 'alert/power')
-        payload: The message payload, typically a JSON string
-        context: Optional RuntimeContext for dependency injection
-
-    Returns:
-        A confirmation message indicating success or failure
-    """
-    client = context.mqtt_client if context else None
-    if client and client.publish(topic, payload):
-        return f"Successfully sent message to topic '{topic}'"
-    return "Error: Failed to send MQTT message. Check connection to broker."
-
-
-def send_telegram_message(
-    message: str,
-    context: Optional['RuntimeContext'] = None
-) -> str:
-    """Send a message to all authorized Telegram users.
-
-    Args:
-        message: The message text to send (Markdown supported)
-        context: Optional RuntimeContext for dependency injection
-
-    Returns:
-        A confirmation message indicating success or failure
-    """
-    telegram_bot = context.telegram_bot if context else None
-    if not telegram_bot:
-        return "Error: Telegram bot not configured or not running"
-
-    try:
-        count = telegram_bot.broadcast_message(message)
-        if count > 0:
-            return f"Successfully sent Telegram message to {count} user(s)"
-        return "Error: No Telegram messages sent (no authorized chats)"
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        return f"Error sending Telegram message: {e}"
-
 
 def _clear_pending_pattern(
     trigger_topic: str, trigger_field: str, action_topic: str
@@ -739,138 +692,3 @@ def report_undo(rule_id: str) -> str:
             return f"Undo count for '{rule_id}' is now {count}/3"
 
     return f"Rule '{rule_id}' not found"
-
-
-# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
-def create_rule(
-    rule_id: str,
-    trigger_topic: str,
-    trigger_field: str,
-    trigger_value: str,
-    action_topic: str,
-    action_payload: str,
-    avg_delay_seconds: float,
-    tolerance_seconds: float,
-    context: Optional['RuntimeContext'] = None
-) -> str:
-    """Create or update an automation rule based on learned patterns.
-
-    This tool is used by the AI to formalize patterns it has detected after
-    observing the same trigger->action sequence multiple times.
-
-    Args:
-        rule_id: Unique identifier for the rule
-        trigger_topic: MQTT topic that triggers the rule
-        trigger_field: JSON field to monitor (e.g., 'occupancy', 'contact')
-        trigger_value: Value that triggers the rule - will be parsed as JSON
-        action_topic: MQTT topic to publish to when triggered
-        action_payload: Payload to send (e.g., '{"state": "ON"}')
-        avg_delay_seconds: Average delay observed before user action
-        tolerance_seconds: Tolerance window for timing
-        context: Optional RuntimeContext for dependency injection
-
-    Returns:
-        Confirmation message indicating the rule was created or updated
-    """
-    # Load existing rules
-    rules_data = load_json_file(LEARNED_RULES_FILE, {"rules": []})
-
-    # Parse the trigger value as JSON to handle booleans, numbers, etc.
-    try:
-        parsed_trigger_value = json.loads(trigger_value)
-    except json.JSONDecodeError:
-        parsed_trigger_value = trigger_value
-
-    # Check if rule already exists by ID
-    existing_rule_by_id = None
-    for i, rule in enumerate(rules_data["rules"]):
-        if rule["id"] == rule_id:
-            existing_rule_by_id = i
-            break
-
-    # Also check if a rule with same trigger+action already exists
-    existing_rule_by_logic = None
-    for i, rule in enumerate(rules_data["rules"]):
-        if (rule["trigger"]["topic"] == trigger_topic and
-                rule["trigger"]["field"] == trigger_field and
-                rule["action"]["topic"] == action_topic):
-            existing_rule_by_logic = i
-            break
-
-    # Get disable_new_rules from context
-    disable_new_rules = context.disable_new_rules if context else False
-
-    new_rule = {
-        "id": rule_id,
-        "trigger": {
-            "topic": trigger_topic,
-            "field": trigger_field,
-            "value": parsed_trigger_value
-        },
-        "action": {
-            "topic": action_topic,
-            "payload": action_payload
-        },
-        "timing": {
-            "avg_delay_seconds": avg_delay_seconds,
-            "tolerance_seconds": tolerance_seconds
-        },
-        "confidence": {
-            "occurrences": 3,
-            "last_triggered": datetime.now().isoformat()
-        },
-        "enabled": not disable_new_rules
-    }
-
-    # Check if this pattern has been rejected
-    if _is_pattern_rejected(trigger_topic, trigger_field, action_topic):
-        return (
-            f"Pattern '{rule_id}' is in the rejected patterns list and will not "
-            "be created. Use remove_rejected_pattern to allow it again."
-        )
-
-    # Determine which index to update (prefer ID match, then logic match)
-    existing_index = (
-        existing_rule_by_id if existing_rule_by_id is not None
-        else existing_rule_by_logic
-    )
-
-    # If rule already exists with same trigger+action, don't update unnecessarily
-    if existing_index is not None:
-        existing_rule = rules_data["rules"][existing_index]
-        # Check if the rule is essentially the same (same trigger value)
-        if existing_rule.get("trigger", {}).get("value") == parsed_trigger_value:
-            return (
-                f"Rule '{existing_rule.get('id', rule_id)}' already exists for "
-                f"{trigger_topic}[{trigger_field}={trigger_value}] -> {action_topic}. "
-                "No update needed."
-            )
-
-    if existing_index is not None:
-        # Update existing rule (increment occurrences if updating)
-        # PRESERVE the enabled state from the existing rule
-        old_enabled = rules_data["rules"][existing_index].get("enabled", True)
-        old_occurrences = (
-            rules_data["rules"][existing_index]
-            .get("confidence", {})
-            .get("occurrences", 0)
-        )
-        new_rule["confidence"]["occurrences"] = old_occurrences + 1
-        new_rule["enabled"] = old_enabled  # Keep the user's choice
-        rules_data["rules"][existing_index] = new_rule
-        action = "updated"
-    else:
-        # Add new rule
-        rules_data["rules"].append(new_rule)
-        action = "created"
-
-    # Save updated rules
-    save_json_file(LEARNED_RULES_FILE, rules_data)
-
-    # Clear pending pattern observations for this trigger+action
-    _clear_pending_pattern(trigger_topic, trigger_field, action_topic)
-
-    return (
-        f"Successfully {action} rule '{rule_id}': "
-        f"{trigger_topic}[{trigger_field}={trigger_value}] -> {action_topic}"
-    )

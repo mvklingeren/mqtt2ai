@@ -9,8 +9,8 @@ import logging
 from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 
-# Import tools module directly (no circular import anymore)
-from mqtt2ai.ai import tools
+# Import ToolHandler for OOP tool execution
+from mqtt2ai.ai.tools import ToolHandler
 from mqtt2ai.ai.tool_definitions import OPENAI_TOOLS, OPENAI_TOOLS_MINIMAL
 from mqtt2ai.ai.providers.openai import OpenAiProvider
 from mqtt2ai.ai.providers.gemini import GeminiProvider
@@ -146,7 +146,8 @@ class AiAgent:
         announce_topic = "mqtt2ai/action/announce"
         try:
             ctx = self._create_runtime_context()
-            tools.send_mqtt_message(announce_topic, json.dumps(announcement), context=ctx)
+            tool_handler = ToolHandler(ctx)
+            tool_handler.send_mqtt_message(announce_topic, json.dumps(announcement))
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.warning("Failed to publish AI action announcement: %s", e)
 
@@ -167,8 +168,9 @@ class AiAgent:
             "arguments": arguments
         })
 
-        # Create runtime context for tool execution
+        # Create runtime context and ToolHandler for tool execution
         ctx = self._create_runtime_context()
+        tool_handler = ToolHandler(ctx)
 
         # For send_mqtt_message, publish announcement first
         if tool_name == "send_mqtt_message":
@@ -180,36 +182,35 @@ class AiAgent:
                 self._announce_ai_action(topic, payload)
 
             try:
-                return tools.send_mqtt_message(topic, payload, context=ctx)
+                return tool_handler.send_mqtt_message(topic, payload)
             except Exception as e:  # pylint: disable=broad-exception-caught
                 return f"Error executing {tool_name}: {e}"
 
         tool_map = {
-            "record_pattern_observation": lambda args: tools.record_pattern_observation(
+            "record_pattern_observation": lambda args: tool_handler.record_pattern_observation(
                 args["trigger_topic"], args["trigger_field"],
                 args["action_topic"], args["delay_seconds"]
             ),
-            "create_rule": lambda args: tools.create_rule(
+            "create_rule": lambda args: tool_handler.create_rule(
                 args["rule_id"], args["trigger_topic"], args["trigger_field"],
                 args["trigger_value"], args["action_topic"], args["action_payload"],
-                args["avg_delay_seconds"], args["tolerance_seconds"],
-                context=ctx
+                args["avg_delay_seconds"], args["tolerance_seconds"]
             ),
-            "reject_pattern": lambda args: tools.reject_pattern(
+            "reject_pattern": lambda args: tool_handler.reject_pattern(
                 args["trigger_topic"], args["trigger_field"],
                 args["action_topic"], args.get("reason", "")
             ),
-            "report_undo": lambda args: tools.report_undo(args["rule_id"]),
-            "toggle_rule": lambda args: tools.toggle_rule(
+            "report_undo": lambda args: tool_handler.report_undo(args["rule_id"]),
+            "toggle_rule": lambda args: tool_handler.toggle_rule(
                 args["rule_id"], args["enabled"]
             ),
-            "get_learned_rules": lambda args: tools.get_learned_rules(),
-            "get_pending_patterns": lambda args: tools.get_pending_patterns(),
+            "get_learned_rules": lambda args: tool_handler.get_learned_rules(),
+            "get_pending_patterns": lambda args: tool_handler.get_pending_patterns(),
             "raise_alert": lambda args: self.alert_handler.raise_alert(
                 args["severity"], args["reason"], args.get("context")
             ),
-            "send_telegram_message": lambda args: tools.send_telegram_message(
-                args["message"], context=ctx
+            "send_telegram_message": lambda args: tool_handler.send_telegram_message(
+                args["message"]
             ),
         }
 
