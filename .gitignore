@@ -152,3 +152,6 @@ Thumbs.db
 
 # --debug mode ouput
 debug-output/
+
+learned_rules.json
+pending_patterns.json
