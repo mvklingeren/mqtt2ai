@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import Config
+from mqtt2ai.core.config import Config
 
 
 class TestConfigDefaults:
@@ -293,4 +293,3 @@ class TestConfigDataclass:
         # Due to default_factory, lists should be independent
         assert "new/topic" in config1.ignore_printing_topics
         assert "new/topic" not in config2.ignore_printing_topics
-

@@ -7,13 +7,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-
-
-
 # Import the functions we want to test (after setting up mocks)
-from tools import (
+from mqtt2ai.ai.tools import (
     send_mqtt_message,
     create_rule,
     get_learned_rules,
@@ -43,9 +38,9 @@ def mock_files(temp_dir, monkeypatch):
     rejected_patterns = os.path.join(temp_dir, "rejected_patterns.json")
 
     # Patch the module-level constants
-    monkeypatch.setattr("tools.LEARNED_RULES_FILE", learned_rules)
-    monkeypatch.setattr("tools.PENDING_PATTERNS_FILE", pending_patterns)
-    monkeypatch.setattr("tools.REJECTED_PATTERNS_FILE", rejected_patterns)
+    monkeypatch.setattr("mqtt2ai.ai.tools.LEARNED_RULES_FILE", learned_rules)
+    monkeypatch.setattr("mqtt2ai.ai.tools.PENDING_PATTERNS_FILE", pending_patterns)
+    monkeypatch.setattr("mqtt2ai.ai.tools.REJECTED_PATTERNS_FILE", rejected_patterns)
 
     return {
         "learned_rules": learned_rules,
@@ -700,5 +695,3 @@ class TestHelperFunctions:
         # Should only have one pattern left
         assert len(data["patterns"]) == 1
         assert data["patterns"][0]["trigger_topic"] == "zigbee2mqtt/pir_b"
-
-

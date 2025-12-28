@@ -10,14 +10,14 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mqtt_client import MqttClient
-from config import Config
+from mqtt2ai.mqtt.client import MqttClient
+from mqtt2ai.core.config import Config
 
 
 @pytest.fixture
 def mock_paho_client():
     """Mock paho.mqtt.client.Client."""
-    with patch("mqtt_client.mqtt.Client") as mock_client_class:
+    with patch("mqtt2ai.mqtt.client.mqtt.Client") as mock_client_class:
         mock_instance = MagicMock()
         mock_client_class.return_value = mock_instance
 

@@ -1,16 +1,12 @@
 """Tests for the utils module."""
 import json
 import os
-import sys
 from unittest.mock import patch, MagicMock
 
 import pytest
 
-import utils
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from utils import load_json_file, save_json_file, publish_mqtt  # pylint: disable=wrong-import-position
+from mqtt2ai.core import utils
+from mqtt2ai.core.utils import load_json_file, save_json_file, publish_mqtt
 
 
 class TestLoadJsonFile:
@@ -188,7 +184,7 @@ class TestSaveJsonFile:
 @pytest.fixture
 def mock_paho_client():
     """Mock paho.mqtt.client.Client for utils module."""
-    with patch("utils.mqtt.Client") as mock_client_class:
+    with patch("mqtt2ai.core.utils.mqtt.Client") as mock_client_class:
         mock_instance = MagicMock()
         mock_client_class.return_value = mock_instance
 
@@ -246,7 +242,7 @@ class TestPublishMqtt:
 
     def test_publish_mqtt_connection_error(self):
         """Test MQTT publish when connection fails."""
-        with patch("utils.mqtt.Client") as mock_client_class:
+        with patch("mqtt2ai.core.utils.mqtt.Client") as mock_client_class:
             mock_client_class.return_value.connect.side_effect = Exception("Connection refused")
             result = publish_mqtt("test/topic", {"state": "ON"}, host="localhost", port="1883")
 

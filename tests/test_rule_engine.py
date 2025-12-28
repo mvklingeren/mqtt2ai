@@ -10,10 +10,10 @@ import pytest
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from config import Config
-from knowledge_base import KnowledgeBase
-from trigger_analyzer import TriggerResult
-from rule_engine import RuleEngine
+from mqtt2ai.core.config import Config
+from mqtt2ai.rules.knowledge_base import KnowledgeBase
+from mqtt2ai.rules.trigger_analyzer import TriggerResult
+from mqtt2ai.rules.engine import RuleEngine
 
 
 @pytest.fixture
@@ -333,4 +333,3 @@ class TestRuleEngineMultipleRules:
 
         assert result is False
         mock_mqtt_client.publish.assert_not_called()
-

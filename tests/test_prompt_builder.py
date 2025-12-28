@@ -2,9 +2,10 @@
 from unittest.mock import MagicMock
 import pytest
 
-from prompt_builder import PromptBuilder, MessageStats, COMPACT_RULEBOOK
-from trigger_analyzer import TriggerResult
-from knowledge_base import KnowledgeBase
+from mqtt2ai.ai.prompt_builder import PromptBuilder, MessageStats
+from mqtt2ai.ai.prompt_templates import COMPACT_RULEBOOK
+from mqtt2ai.rules.trigger_analyzer import TriggerResult
+from mqtt2ai.rules.knowledge_base import KnowledgeBase
 
 
 class TestPromptBuilder:
@@ -772,4 +773,3 @@ class TestPatternLearningScenarios(TestPromptBuilder):
             elif "kitchen_pir" in line:
                 assert "[STATUS]" not in line
                 assert "[SKIP-LEARNED]" not in line
-
