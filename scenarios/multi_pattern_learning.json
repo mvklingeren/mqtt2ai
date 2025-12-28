@@ -61,7 +61,7 @@
     },
     "final_rules_file": {
       "type": "file_state",
-      "file": "learned_rules.json",
+      "file": "configs/learned_rules.json",
       "rules_min": 1,
       "_comment": "At least 1 rule should be saved to learned_rules.json"
     }
