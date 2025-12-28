@@ -193,22 +193,22 @@ class AiOrchestrator:
                 # Wait for a request with timeout to allow checking self._running
                 request = self._queue.get(timeout=1.0)
 
-                # None is the shutdown signal
-                if request is None:
-                    logging.debug("AI worker received shutdown signal")
-                    break
-
-                # Skip expired requests to avoid processing stale data
-                if request.is_expired():
-                    age = time.time() - request.created_at
-                    logging.info(
-                        "Skipping expired AI request (age: %.1fs, reason: %s)",
-                        age, request.reason
-                    )
-                    self._queue.task_done()
-                    continue
-
+                # Wrap everything after get() to ensure task_done() is always called
                 try:
+                    # None is the shutdown signal
+                    if request is None:
+                        logging.debug("AI worker received shutdown signal")
+                        break
+
+                    # Skip expired requests to avoid processing stale data
+                    if request.is_expired():
+                        age = time.time() - request.created_at
+                        logging.info(
+                            "Skipping expired AI request (age: %.1fs, reason: %s)",
+                            age, request.reason
+                        )
+                        continue
+
                     # Reload knowledge base to get any updates
                     self.kb.load_all()
                     self.ai.run_analysis(
