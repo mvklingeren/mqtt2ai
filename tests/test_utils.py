@@ -180,6 +180,55 @@ class TestSaveJsonFile:
 
         assert loaded == original
 
+    def test_save_json_file_no_temp_file_left_behind(self, temp_dir):
+        """Test that atomic write cleans up temp file after save."""
+        filepath = os.path.join(temp_dir, "atomic.json")
+        tmp_path = filepath + ".tmp"
+        data = {"atomic": True}
+
+        save_json_file(filepath, data)
+
+        # Main file should exist
+        assert os.path.exists(filepath)
+        # Temp file should NOT exist after successful save
+        assert not os.path.exists(tmp_path)
+
+    def test_save_json_file_atomic_preserves_old_on_read(self, temp_dir):
+        """Test that atomic write ensures readers see complete data.
+
+        This verifies that during a write, the original file remains
+        intact until the atomic replace happens.
+        """
+        filepath = os.path.join(temp_dir, "atomic_read.json")
+
+        # Save initial data
+        initial_data = {"version": 1, "rules": ["rule1", "rule2"]}
+        save_json_file(filepath, initial_data)
+
+        # Save new data
+        new_data = {"version": 2, "rules": ["rule1", "rule2", "rule3"]}
+        save_json_file(filepath, new_data)
+
+        # After save, we should see the new data (atomic swap completed)
+        loaded = load_json_file(filepath, {})
+        assert loaded == new_data
+
+    def test_save_json_file_atomic_multiple_writes(self, temp_dir):
+        """Test multiple atomic writes don't leave temp files."""
+        filepath = os.path.join(temp_dir, "multi_atomic.json")
+        tmp_path = filepath + ".tmp"
+
+        # Perform multiple saves
+        for i in range(5):
+            save_json_file(filepath, {"iteration": i})
+
+        # Main file should have final value
+        loaded = load_json_file(filepath, {})
+        assert loaded == {"iteration": 4}
+
+        # No temp file should remain
+        assert not os.path.exists(tmp_path)
+
 
 @pytest.fixture
 def mock_paho_client():

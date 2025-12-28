@@ -29,7 +29,7 @@ DEFAULT_OPENAI_MODELS = [
 class Config:  # pylint: disable=too-many-instance-attributes
     """Configuration settings for the MQTT AI Daemon."""
 
-    mqtt_host: str = field(default_factory=lambda: os.environ.get("MQTT_HOST", "192.168.1.245"))
+    mqtt_host: str = field(default_factory=lambda: os.environ.get("MQTT_HOST", "localhost"))
     mqtt_port: str = field(default_factory=lambda: os.environ.get("MQTT_PORT", "1883"))
     mqtt_topics: List[str] = field(
         default_factory=lambda: [
@@ -145,7 +145,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
 
         parser.add_argument(
             "--mqtt-host",
-            default=os.environ.get("MQTT_HOST", "192.168.1.245"),
+            default=os.environ.get("MQTT_HOST", "localhost"),
             help="MQTT Broker Host"
         )
         parser.add_argument(
