@@ -327,7 +327,6 @@ class TestAiAgentRunAnalysis:
         with patch("ai_providers.gemini_provider.genai.Client"):
             agent = AiAgent(config, mock_event_bus)
             kb = KnowledgeBase(config)
-            kb.rulebook_content = "Test rulebook"
 
             with patch.object(agent.prompt_builder, "build") as mock_build:
                 mock_build.return_value = "test prompt"

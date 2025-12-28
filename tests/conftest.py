@@ -31,27 +31,11 @@ def config():
 def config_with_temp_files(temp_dir):
     """Create a Config instance with temp file paths."""
     cfg = Config()
-    cfg.rulebook_file = os.path.join(temp_dir, "rulebook.md")
     cfg.filtered_triggers_file = os.path.join(temp_dir, "filtered_triggers.json")
     cfg.learned_rules_file = os.path.join(temp_dir, "learned_rules.json")
     cfg.pending_patterns_file = os.path.join(temp_dir, "pending_patterns.json")
     cfg.rejected_patterns_file = os.path.join(temp_dir, "rejected_patterns.json")
     return cfg
-
-
-@pytest.fixture
-def sample_rulebook_content():
-    """Sample rulebook content for testing."""
-    return """# Home Automation Rulebook
-
-## Safety Rules
-- Monitor smoke detectors
-- Alert on water leaks
-- Track temperature anomalies
-
-## Automation Rules
-- Motion detection triggers lights
-"""
 
 
 @pytest.fixture

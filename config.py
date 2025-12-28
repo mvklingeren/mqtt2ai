@@ -48,11 +48,10 @@ class Config:  # pylint: disable=too-many-instance-attributes
     device_track_pattern: str = "zigbee2mqtt/*"  # Glob pattern for topics to track
 
     # Files
-    rulebook_file: str = "rulebook.md"
-    filtered_triggers_file: str = "filtered_triggers.json"
-    learned_rules_file: str = "learned_rules.json"
-    pending_patterns_file: str = "pending_patterns.json"
-    rejected_patterns_file: str = "rejected_patterns.json"
+    filtered_triggers_file: str = "configs/filtered_triggers.json"
+    learned_rules_file: str = "configs/learned_rules.json"
+    pending_patterns_file: str = "configs/pending_patterns.json"
+    rejected_patterns_file: str = "configs/rejected_patterns.json"
 
     # AI Provider
     ai_provider: str = "openai-compatible"  # "openai-compatible" (Groq), "gemini", "claude"

@@ -75,30 +75,25 @@ class TestConfigDefaults:
 class TestConfigFileDefaults:
     """Test default file path configuration."""
 
-    def test_default_rulebook_file(self):
-        """Test default rulebook file path."""
-        config = Config()
-        assert config.rulebook_file == "rulebook.md"
-
     def test_default_filtered_triggers_file(self):
         """Test default filtered triggers file path."""
         config = Config()
-        assert config.filtered_triggers_file == "filtered_triggers.json"
+        assert config.filtered_triggers_file == "configs/filtered_triggers.json"
 
     def test_default_learned_rules_file(self):
         """Test default learned rules file path."""
         config = Config()
-        assert config.learned_rules_file == "learned_rules.json"
+        assert config.learned_rules_file == "configs/learned_rules.json"
 
     def test_default_pending_patterns_file(self):
         """Test default pending patterns file path."""
         config = Config()
-        assert config.pending_patterns_file == "pending_patterns.json"
+        assert config.pending_patterns_file == "configs/pending_patterns.json"
 
     def test_default_rejected_patterns_file(self):
         """Test default rejected patterns file path."""
         config = Config()
-        assert config.rejected_patterns_file == "rejected_patterns.json"
+        assert config.rejected_patterns_file == "configs/rejected_patterns.json"
 
 
 class TestConfigAIProviders:

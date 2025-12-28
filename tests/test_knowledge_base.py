@@ -20,7 +20,6 @@ class TestKnowledgeBaseInit:
         assert kb.learned_rules == {"rules": []}
         assert kb.pending_patterns == {"patterns": []}
         assert kb.rejected_patterns == {"patterns": []}
-        assert kb.rulebook_content == ""
 
     def test_init_empty_state(self, config):
         """Test that initial state is empty."""
@@ -43,7 +42,6 @@ class TestKnowledgeBaseLoadAll:
         assert kb.learned_rules == {"rules": []}
         assert kb.pending_patterns == {"patterns": []}
         assert kb.rejected_patterns == {"patterns": []}
-        assert kb.rulebook_content == ""
 
     def test_load_learned_rules(self, config_with_temp_files, sample_learned_rules):
         """Test loading learned rules from file."""
@@ -80,24 +78,12 @@ class TestKnowledgeBaseLoadAll:
         assert kb.rejected_patterns == sample_rejected_patterns
         assert len(kb.rejected_patterns["patterns"]) == 1
 
-    def test_load_rulebook(self, config_with_temp_files, sample_rulebook_content):
-        """Test loading rulebook from file."""
-        with open(config_with_temp_files.rulebook_file, "w", encoding="utf-8") as f:
-            f.write(sample_rulebook_content)
-
-        kb = KnowledgeBase(config_with_temp_files)
-        kb.load_all()
-
-        assert kb.rulebook_content == sample_rulebook_content
-        assert "Home Automation Rulebook" in kb.rulebook_content
-
     def test_load_all_files(
         self,
         config_with_temp_files,
         sample_learned_rules,
         sample_pending_patterns,
         sample_rejected_patterns,
-        sample_rulebook_content
     ):
         """Test loading all files together."""
         # Create all files
@@ -107,8 +93,6 @@ class TestKnowledgeBaseLoadAll:
             json.dump(sample_pending_patterns, f)
         with open(config_with_temp_files.rejected_patterns_file, "w", encoding="utf-8") as f:
             json.dump(sample_rejected_patterns, f)
-        with open(config_with_temp_files.rulebook_file, "w", encoding="utf-8") as f:
-            f.write(sample_rulebook_content)
 
         kb = KnowledgeBase(config_with_temp_files)
         kb.load_all()
@@ -116,7 +100,6 @@ class TestKnowledgeBaseLoadAll:
         assert kb.learned_rules == sample_learned_rules
         assert kb.pending_patterns == sample_pending_patterns
         assert kb.rejected_patterns == sample_rejected_patterns
-        assert kb.rulebook_content == sample_rulebook_content
 
     def test_reload_picks_up_changes(self, config_with_temp_files):
         """Test that reload picks up file changes."""
@@ -151,16 +134,6 @@ class TestKnowledgeBaseLoadAll:
 
         # Should use default
         assert kb.learned_rules == {"rules": []}
-
-    def test_load_missing_rulebook(self, config_with_temp_files):
-        """Test that missing rulebook doesn't crash."""
-        # Point to non-existent rulebook
-        config_with_temp_files.rulebook_file = "/nonexistent/path/rulebook.md"
-
-        kb = KnowledgeBase(config_with_temp_files)
-        kb.load_all()  # Should not raise
-
-        assert kb.rulebook_content == ""
 
 
 class TestKnowledgeBaseRulesAccess:

@@ -1,7 +1,7 @@
 """Knowledge Base module for the MQTT AI Daemon.
 
 This module manages loading and reloading of learned rules, pending patterns,
-rejected patterns, and the rulebook content from disk.
+and rejected patterns from disk.
 """
 import logging
 import os
@@ -19,7 +19,6 @@ class KnowledgeBase:  # pylint: disable=too-few-public-methods
         self.learned_rules: Dict[str, Any] = {"rules": []}
         self.pending_patterns: Dict[str, Any] = {"patterns": []}
         self.rejected_patterns: Dict[str, Any] = {"patterns": []}
-        self.rulebook_content: str = ""
         self._file_mtimes: Dict[str, float] = {}
 
     def _get_file_mtime(self, path: str) -> float:
@@ -35,7 +34,6 @@ class KnowledgeBase:  # pylint: disable=too-few-public-methods
             self.config.learned_rules_file,
             self.config.pending_patterns_file,
             self.config.rejected_patterns_file,
-            self.config.rulebook_file,
         ]
         for path in files:
             current_mtime = self._get_file_mtime(path)
@@ -49,7 +47,6 @@ class KnowledgeBase:  # pylint: disable=too-few-public-methods
             self.config.learned_rules_file,
             self.config.pending_patterns_file,
             self.config.rejected_patterns_file,
-            self.config.rulebook_file,
         ]
         for path in files:
             self._file_mtimes[path] = self._get_file_mtime(path)
@@ -81,16 +78,6 @@ class KnowledgeBase:  # pylint: disable=too-few-public-methods
         self.rejected_patterns = load_json_file(
             self.config.rejected_patterns_file, {"patterns": []}
         )
-
-        try:
-            with open(self.config.rulebook_file, "r", encoding="utf-8") as f:
-                self.rulebook_content = f.read()
-        except FileNotFoundError:
-            logging.error(
-                "Rulebook file '%s' not found.", self.config.rulebook_file
-            )
-            # Don't exit, just continue with empty rulebook
-            self.rulebook_content = ""
 
         # Update mtimes after successful load
         self._update_mtimes()

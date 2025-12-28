@@ -22,7 +22,6 @@ class TestPromptBuilder:
         kb.learned_rules = sample_learned_rules
         kb.pending_patterns = sample_pending_patterns
         kb.rejected_patterns = sample_rejected_patterns
-        kb.rulebook_content = "# Test Rulebook"
         return kb
 
     @pytest.fixture

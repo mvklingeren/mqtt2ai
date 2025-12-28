@@ -14,12 +14,13 @@ from typing import Optional
 
 import paho.mqtt.client as mqtt
 
+from prompt_templates import COMPACT_RULEBOOK
+
 # --- Configuration ---
 MAX_MESSAGES = 100
 MQTT_HOST = "192.168.1.245"
 MQTT_PORT = 1883
 MQTT_TOPIC = "zigbee2mqtt/#"
-RULEBOOK_FILE = "rulebook.md"
 GEMINI_CLI_COMMAND = "/opt/homebrew/bin/gemini"
 CHECK_INTERVAL_SECONDS = 10
 
@@ -154,12 +155,7 @@ def listen_to_mqtt():
 
     Stores messages and periodically checks for alarms in a background thread.
     """
-    try:
-        with open(RULEBOOK_FILE, "r", encoding="utf-8") as f:
-            rulebook_content = f.read()
-    except FileNotFoundError:
-        print(f"Error: '{RULEBOOK_FILE}' not found.", file=sys.stderr)
-        sys.exit(1)
+    rulebook_content = COMPACT_RULEBOOK
 
     messages = collections.deque(maxlen=MAX_MESSAGES)
     last_check_time = time.time()
