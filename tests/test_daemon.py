@@ -8,8 +8,6 @@ import time
 from datetime import datetime
 from unittest.mock import patch, MagicMock
 
-import pytest
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from daemon import MqttAiDaemon, setup_logging, timestamp

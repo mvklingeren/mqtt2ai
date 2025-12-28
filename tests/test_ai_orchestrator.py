@@ -4,8 +4,6 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from ai_orchestrator import AiOrchestrator, AiRequest
 
 

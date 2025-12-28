@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from trigger_analyzer import TriggerResult
+from ai_agent import AiAgent
+from knowledge_base import KnowledgeBase
 
 
 @dataclass
@@ -38,8 +40,8 @@ class AiOrchestrator:
 
     def __init__(
         self,
-        ai_agent,
-        knowledge_base,
+        ai_agent: AiAgent,
+        knowledge_base: KnowledgeBase,
         no_ai: bool = False,
         queue_size: int = 20
     ):

@@ -2,10 +2,11 @@
 import json
 import os
 import sys
-
 from unittest.mock import patch, MagicMock
 
 import pytest
+
+import utils
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -203,7 +204,6 @@ def mock_paho_client():
 @pytest.fixture(autouse=True)
 def reset_utils_client():
     """Reset the module-level MQTT client before each test."""
-    import utils
     utils._MQTT_CLIENT = None
     yield
     utils._MQTT_CLIENT = None
