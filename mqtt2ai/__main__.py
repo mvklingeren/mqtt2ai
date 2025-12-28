@@ -38,7 +38,7 @@ def main():
     # Handle SIGTERM for graceful shutdown (e.g., docker stop)
     def handle_signal(signum, frame):  # pylint: disable=unused-argument
         logging.info("Received signal %d, stopping...", signum)
-        daemon.running = False
+        daemon.shutdown.running = False
 
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)

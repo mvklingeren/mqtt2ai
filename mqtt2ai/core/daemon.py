@@ -5,17 +5,19 @@ the MQTT message collection, trigger analysis, and AI integration.
 """
 import collections
 import json
+import logging
 import queue
 import select
 import sys
 import threading
 import time
-import logging
-from datetime import datetime
 from collections import deque as Deque
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Dict, Optional
 
 from mqtt2ai.core.config import Config
+from mqtt2ai.core.constants import AiProvider, TermColors, TriggerReason, MessagePrefix
 from mqtt2ai.core.event_bus import event_bus
 from mqtt2ai.core.scenario_validator import (
     ScenarioValidator,
@@ -34,6 +36,64 @@ from mqtt2ai.rules.engine import RuleEngine
 from mqtt2ai.rules.device_tracker import DeviceStateTracker
 
 VERSION = "0.2"
+
+
+@dataclass
+class MessageBuffer:
+    """Thread-safe buffer for MQTT messages.
+
+    Encapsulates message storage, counting, and locking to reduce
+    the number of instance attributes in the main daemon class.
+    """
+    max_messages: int
+    deque: Deque[str] = field(init=False)
+    new_count: int = field(default=0, init=False)
+    lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+
+    def __post_init__(self):
+        self.deque = collections.deque(maxlen=self.max_messages)
+
+    def reset_count(self) -> None:
+        """Reset the new message counter (call while holding lock)."""
+        self.new_count = 0
+
+
+@dataclass
+class ShutdownController:
+    """Controls graceful shutdown signaling.
+
+    Provides thread-safe shutdown coordination between the main loop
+    and background threads like the collector.
+    """
+    running: bool = True
+    event: threading.Event = field(default_factory=threading.Event)
+    reason: Optional[str] = None
+
+    def request(self, reason: str, wake_event: Optional[threading.Event] = None) -> None:
+        """Request a shutdown with the given reason.
+
+        Args:
+            reason: Human-readable shutdown reason
+            wake_event: Optional event to set to wake up the main loop
+        """
+        self.reason = reason
+        self.running = False
+        self.event.set()
+        if wake_event:
+            wake_event.set()
+
+
+@dataclass
+class TestContext:
+    """Context for test mode validation.
+
+    Holds scenario assertions and test results for simulation-based
+    testing with assertion validation.
+    """
+    assertions: Dict[str, dict] = field(default_factory=dict)
+    scenario_name: str = ""
+    passed: Optional[bool] = None  # None = not in test mode
+
 
 BANNER = r"""
 __  __  ___ _____ _____ ____    _    ___
@@ -56,18 +116,13 @@ def setup_logging(config: Config):
 
 def print_banner(config: Config):
     """Print the MQTT2AI ASCII art banner with version and AI info."""
-    cyan, yellow, reset = "\033[96m", "\033[93m", "\033[0m"
-    dim, bold = "\033[2m", "\033[1m"
-
     # Get the appropriate model based on provider
     provider = config.ai_provider
-    if provider == "gemini":
+    if provider == AiProvider.GEMINI:
         model = config.gemini_model
-    elif provider == "claude":
+    elif provider == AiProvider.CLAUDE:
         model = config.claude_model
-    elif provider == "codex-openai":
-        model = config.codex_model
-    elif provider == "openai-compatible":
+    elif provider == AiProvider.OPENAI_COMPATIBLE:
         models = config.openai_models
         if len(models) > 1:
             model = f"{len(models)} models (round-robin)"
@@ -78,15 +133,18 @@ def print_banner(config: Config):
     else:
         model = "unknown"
 
-    print(f"{cyan}{BANNER}{reset}")
-    print(f"  {dim}v{VERSION}{reset}  {bold}AI:{reset} {yellow}{provider}{reset} / {model}")
+    print(f"{TermColors.CYAN}{BANNER}{TermColors.RESET}")
+    print(
+        f"  {TermColors.DIM}v{VERSION}{TermColors.RESET}  "
+        f"{TermColors.BOLD}AI:{TermColors.RESET} "
+        f"{TermColors.YELLOW}{provider}{TermColors.RESET} / {model}"
+    )
 
     # Show simulation mode if active
     if config.simulation_file:
-        magenta = "\033[95m"
         print(
-            f"  {bold}{magenta}[SIMULATION MODE]{reset} "
-            f"{dim}{config.simulation_file}{reset}"
+            f"  {TermColors.BOLD}{TermColors.MAGENTA}[SIMULATION MODE]{TermColors.RESET} "
+            f"{TermColors.DIM}{config.simulation_file}{TermColors.RESET}"
         )
 
     print()
@@ -97,8 +155,14 @@ def timestamp() -> str:
     return datetime.now().strftime("[%H:%M:%S]")
 
 
-class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-public-methods
-    """Main daemon class orchestrating the components."""
+class MqttAiDaemon:  # pylint: disable=too-few-public-methods
+    """Main daemon class orchestrating the components.
+
+    Uses composition with helper classes to keep instance attribute count manageable:
+    - MessageBuffer: message storage and counting
+    - ShutdownController: graceful shutdown coordination
+    - TestContext: test mode assertions and results
+    """
 
     def __init__(self, config: Config):
         self.config = config
@@ -122,20 +186,16 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             simulation_mode=bool(config.simulation_file)
         )
 
-
         # Rule engine for direct execution of learned rules (no AI needed)
         self.rule_engine = RuleEngine(self.mqtt, self.kb)
 
-        self.messages_deque: Deque[str] = collections.deque(maxlen=config.max_messages)
-        self.new_message_count = 0
-        self.lock = threading.Lock()
+        # Composed helper objects to reduce instance attribute count
+        self.message_buffer = MessageBuffer(max_messages=config.max_messages)
+        self.shutdown = ShutdownController()
+        self.test_ctx = TestContext()
 
+        # Event for signaling AI checks
         self.ai_event = threading.Event()
-        self.running = True
-
-        # Graceful shutdown signaling from collector threads
-        self.shutdown_event = threading.Event()
-        self.shutdown_reason: Optional[str] = None
 
         # AI orchestrator for async AI request processing
         self.ai_orchestrator = AiOrchestrator(
@@ -156,8 +216,8 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             device_tracker=self.device_tracker,
             rule_engine=self.rule_engine,
             knowledge_base=self.kb,
-            messages_deque=self.messages_deque,
-            lock=self.lock,
+            messages_deque=self.message_buffer.deque,
+            lock=self.message_buffer.lock,
             callbacks=CollectorCallbacks(
                 on_trigger=self._on_trigger,
                 on_shutdown=self._request_shutdown,
@@ -185,22 +245,17 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             # Connect Telegram bot to AI agent for alert notifications
             self.ai.set_telegram_bot(self.telegram_bot)
 
-        # Test mode: load assertions from scenario file
-        self._scenario_assertions: Dict[str, dict] = {}
-        self._scenario_name: str = ""
-        self._test_passed: Optional[bool] = None  # None = not in test mode
-
     def _load_scenario_assertions(self):
         """Load assertions from the scenario file for test mode validation."""
         try:
             with open(self.config.simulation_file, "r", encoding="utf-8") as f:
                 scenario = json.load(f)
-            self._scenario_assertions = scenario.get("assertions", {})
-            self._scenario_name = scenario.get("name", "")
-            if self._scenario_assertions:
+            self.test_ctx.assertions = scenario.get("assertions", {})
+            self.test_ctx.scenario_name = scenario.get("name", "")
+            if self.test_ctx.assertions:
                 logging.info(
                     "Test mode: loaded %d assertions from scenario",
-                    len(self._scenario_assertions)
+                    len(self.test_ctx.assertions)
                 )
             else:
                 logging.warning(
@@ -208,7 +263,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 )
         except (FileNotFoundError, json.JSONDecodeError) as e:
             logging.error("Failed to load scenario assertions: %s", e)
-            self._scenario_assertions = {}
+            self.test_ctx.assertions = {}
 
     def _request_shutdown(self, reason: str):
         """Signal the main loop to perform a graceful shutdown.
@@ -216,10 +271,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         This method is thread-safe and can be called from collector threads
         to request a clean shutdown instead of using os.kill().
         """
-        self.shutdown_reason = reason
-        self.running = False
-        self.shutdown_event.set()
-        self.ai_event.set()  # Wake up main loop
+        self.shutdown.request(reason, wake_event=self.ai_event)
 
     def _on_trigger(self, trigger_result: TriggerResult, timestamp: float):
         """Handle a trigger detected by the collector.
@@ -319,7 +371,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         last_check_time = time.time()
 
         try:
-            while self.running and self.collector.is_alive():
+            while self.shutdown.running and self.collector.is_alive():
                 # Wait for trigger or timeout (1s)
                 self.ai_event.wait(timeout=1.0)
 
@@ -328,15 +380,15 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                     self.ai_event.clear()
 
                 # Check for shutdown signal from collector threads
-                if self.shutdown_event.is_set():
-                    if self.shutdown_reason:
-                        logging.critical("Shutdown requested: %s", self.shutdown_reason)
+                if self.shutdown.event.is_set():
+                    if self.shutdown.reason:
+                        logging.critical("Shutdown requested: %s", self.shutdown.reason)
                     break
 
-                with self.lock:
+                with self.message_buffer.lock:
                     should_check_count = (
                         not self.config.disable_threshold_trigger
-                        and self.new_message_count >= self.config.ai_check_threshold
+                        and self.message_buffer.new_count >= self.config.ai_check_threshold
                     )
 
                 should_check_time = (
@@ -349,10 +401,10 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 while not self.trigger_queue.empty():
                     try:
                         trigger_result, _ = self.trigger_queue.get_nowait()
-                        reason = "smart_trigger"
+                        reason = TriggerReason.SMART_TRIGGER
 
                         # Get snapshot for this trigger, excluding init messages
-                        with self.lock:
+                        with self.message_buffer.lock:
                             snapshot = self._create_filtered_snapshot()
 
                         if snapshot:
@@ -371,9 +423,9 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                         False, should_check_count
                     )
 
-                    with self.lock:
+                    with self.message_buffer.lock:
                         snapshot = self._create_filtered_snapshot()
-                        self.new_message_count = 0
+                        self.message_buffer.reset_count()
                         last_check_time = time.time()
 
                     if snapshot:
@@ -392,12 +444,12 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         """Determine the reason for triggering an AI check."""
         if self.manual_trigger:
             self.manual_trigger = False
-            return "manual (Enter pressed)"
+            return TriggerReason.MANUAL
         if instant_trigger:
-            return "smart_trigger"
+            return TriggerReason.SMART_TRIGGER
         if should_check_count:
-            return f"message_count ({self.config.ai_check_threshold})"
-        return f"interval ({self.config.ai_check_interval}s)"
+            return TriggerReason.message_count(self.config.ai_check_threshold)
+        return TriggerReason.interval(self.config.ai_check_interval)
 
     def _create_filtered_snapshot(self) -> str:
         """Create a snapshot excluding retained messages.
@@ -406,11 +458,11 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         subscription) are marked with [RETAINED] prefix and excluded from
         AI analysis since they represent historical state, not new events.
 
-        Must be called while holding self.lock.
+        Must be called while holding message_buffer.lock.
         """
         filtered_lines = [
-            line for line in self.messages_deque
-            if not line.startswith("[RETAINED]")
+            line for line in self.message_buffer.deque
+            if not line.startswith(MessagePrefix.RETAINED)
         ]
         return "\n".join(filtered_lines)
 
@@ -428,7 +480,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
 
         logging.info("Press [Enter] to trigger an immediate AI check")
 
-        while self.running:
+        while self.shutdown.running:
             try:
                 ready, _, _ = select.select([sys.stdin], [], [], 1.0)
                 if ready:
@@ -440,13 +492,14 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                         self.manual_trigger = True
                         self.ai_event.set()
                         logging.info("Manual AI check triggered")
-            except Exception:  # pylint: disable=broad-exception-caught
+            except (OSError, ValueError) as e:
                 # Stdin might not be available (e.g., when running as service)
+                logging.debug("Keyboard input error: %s", e)
                 time.sleep(1.0)
 
     def _shutdown(self):
         """Gracefully shutdown the daemon and its threads."""
-        self.running = False
+        self.shutdown.running = False
 
         # Stop collector
         self.collector.stop()
@@ -465,23 +518,23 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         logging.info("Daemon shutdown complete")
 
         # Test mode: run validation and print results
-        if self.config.test_mode and self._scenario_assertions:
+        if self.config.test_mode and self.test_ctx.assertions:
             self._run_test_validation()
 
     def _run_test_validation(self):
         """Run scenario validation and print test results."""
-        validator = ScenarioValidator(self._scenario_assertions)
+        validator = ScenarioValidator(self.test_ctx.assertions)
         results = validator.validate()
 
         # Print results to terminal
-        self._test_passed = print_test_report(results, self._scenario_name)
+        self.test_ctx.passed = print_test_report(results, self.test_ctx.scenario_name)
 
         # Write JSON report if requested
         if self.config.test_report_file:
             write_json_report(
                 results,
                 self.config.test_report_file,
-                self._scenario_name
+                self.test_ctx.scenario_name
             )
 
     def get_test_result(self) -> Optional[bool]:
@@ -490,4 +543,4 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         Returns:
             True if all tests passed, False if any failed, None if not in test mode
         """
-        return self._test_passed
+        return self.test_ctx.passed

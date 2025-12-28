@@ -16,11 +16,10 @@ from mqtt2ai.ai.providers.openai import OpenAiProvider
 from mqtt2ai.ai.providers.gemini import GeminiProvider
 from mqtt2ai.ai.providers.claude import ClaudeProvider
 from mqtt2ai.ai.alert_handler import AlertHandler
+from mqtt2ai.core.constants import MqttTopics
+from mqtt2ai.core.context import RuntimeContext
 from mqtt2ai.core.event_bus import event_bus, EventType
 from mqtt2ai.core.utils import write_debug_output
-
-
-from mqtt2ai.core.context import RuntimeContext
 from mqtt2ai.core.config import Config
 from mqtt2ai.rules.knowledge_base import KnowledgeBase
 from mqtt2ai.ai.prompt_builder import PromptBuilder
@@ -143,11 +142,12 @@ class AiAgent:
             "timestamp": datetime.now().isoformat()
         }
 
-        announce_topic = "mqtt2ai/action/announce"
         try:
             ctx = self._create_runtime_context()
             tool_handler = ToolHandler(ctx)
-            tool_handler.send_mqtt_message(announce_topic, json.dumps(announcement))
+            tool_handler.send_mqtt_message(
+                MqttTopics.ACTION_ANNOUNCE, json.dumps(announcement)
+            )
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.warning("Failed to publish AI action announcement: %s", e)
 

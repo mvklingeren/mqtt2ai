@@ -93,25 +93,25 @@ class TestMqttAiDaemonInit:
         config_with_temp_files.max_messages = 500
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        assert daemon.messages_deque.maxlen == 500
+        assert daemon.message_buffer.deque.maxlen == 500
 
     def test_init_sets_running_true(self, config_with_temp_files):
         """Test that running flag is set to True."""
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        assert daemon.running is True
+        assert daemon.shutdown.running is True
 
     def test_init_message_count_zero(self, config_with_temp_files):
         """Test that new message count starts at zero."""
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        assert daemon.new_message_count == 0
+        assert daemon.message_buffer.new_count == 0
 
     def test_init_creates_lock(self, config_with_temp_files):
         """Test that thread lock is created."""
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        assert isinstance(daemon.lock, type(threading.Lock()))
+        assert isinstance(daemon.message_buffer.lock, type(threading.Lock()))
 
     def test_init_creates_event(self, config_with_temp_files):
         """Test that AI event is created."""
@@ -189,36 +189,36 @@ class TestMqttAiDaemonMessageDeque:
         """Test that messages are added to deque."""
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        with daemon.lock:
-            daemon.messages_deque.append("[12:00:00] test message")
-            daemon.new_message_count += 1
+        with daemon.message_buffer.lock:
+            daemon.message_buffer.deque.append("[12:00:00] test message")
+            daemon.message_buffer.new_count += 1
 
-        assert len(daemon.messages_deque) == 1
-        assert daemon.new_message_count == 1
+        assert len(daemon.message_buffer.deque) == 1
+        assert daemon.message_buffer.new_count == 1
 
     def test_messages_deque_maxlen_enforced(self, config_with_temp_files):
         """Test that deque maxlen is enforced."""
         config_with_temp_files.max_messages = 3
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        with daemon.lock:
+        with daemon.message_buffer.lock:
             for i in range(5):
-                daemon.messages_deque.append(f"message {i}")
+                daemon.message_buffer.deque.append(f"message {i}")
 
         # Should only have last 3 messages
-        assert len(daemon.messages_deque) == 3
-        assert "message 2" in daemon.messages_deque
-        assert "message 4" in daemon.messages_deque
+        assert len(daemon.message_buffer.deque) == 3
+        assert "message 2" in daemon.message_buffer.deque
+        assert "message 4" in daemon.message_buffer.deque
 
     def test_snapshot_creation(self, config_with_temp_files):
         """Test creating a snapshot from deque."""
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        with daemon.lock:
-            daemon.messages_deque.append("msg 1")
-            daemon.messages_deque.append("msg 2")
-            daemon.messages_deque.append("msg 3")
-            snapshot = "\n".join(list(daemon.messages_deque))
+        with daemon.message_buffer.lock:
+            daemon.message_buffer.deque.append("msg 1")
+            daemon.message_buffer.deque.append("msg 2")
+            daemon.message_buffer.deque.append("msg 3")
+            snapshot = "\n".join(list(daemon.message_buffer.deque))
 
         assert "msg 1" in snapshot
         assert "msg 2" in snapshot
@@ -228,12 +228,12 @@ class TestMqttAiDaemonMessageDeque:
         """Test that _create_filtered_snapshot excludes [RETAINED] prefixed messages."""
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        with daemon.lock:
+        with daemon.message_buffer.lock:
             # Mix of retained and normal messages
-            daemon.messages_deque.append("[RETAINED] [12:00:00] zigbee2mqtt/sensor1 {}")
-            daemon.messages_deque.append("[RETAINED] [12:00:01] zigbee2mqtt/sensor2 {}")
-            daemon.messages_deque.append("[12:00:05] zigbee2mqtt/sensor3 {}")
-            daemon.messages_deque.append("[12:00:06] zigbee2mqtt/sensor4 {}")
+            daemon.message_buffer.deque.append("[RETAINED] [12:00:00] zigbee2mqtt/sensor1 {}")
+            daemon.message_buffer.deque.append("[RETAINED] [12:00:01] zigbee2mqtt/sensor2 {}")
+            daemon.message_buffer.deque.append("[12:00:05] zigbee2mqtt/sensor3 {}")
+            daemon.message_buffer.deque.append("[12:00:06] zigbee2mqtt/sensor4 {}")
             snapshot = daemon._create_filtered_snapshot()
 
         # Retained messages should be excluded
@@ -248,9 +248,9 @@ class TestMqttAiDaemonMessageDeque:
         """Test that filtered snapshot is empty when only retained messages exist."""
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        with daemon.lock:
-            daemon.messages_deque.append("[RETAINED] [12:00:00] zigbee2mqtt/sensor1 {}")
-            daemon.messages_deque.append("[RETAINED] [12:00:01] zigbee2mqtt/sensor2 {}")
+        with daemon.message_buffer.lock:
+            daemon.message_buffer.deque.append("[RETAINED] [12:00:00] zigbee2mqtt/sensor1 {}")
+            daemon.message_buffer.deque.append("[RETAINED] [12:00:01] zigbee2mqtt/sensor2 {}")
             snapshot = daemon._create_filtered_snapshot()
 
         assert snapshot == ""
@@ -336,15 +336,15 @@ class TestMqttAiDaemonRunning:
         """Test that running can be set to False."""
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        daemon.running = False
+        daemon.shutdown.running = False
 
-        assert daemon.running is False
+        assert daemon.shutdown.running is False
 
     def test_running_starts_true(self, config_with_temp_files):
         """Test that running starts as True."""
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        assert daemon.running is True
+        assert daemon.shutdown.running is True
 
 
 class TestMqttAiDaemonThreadSafety:
@@ -354,7 +354,7 @@ class TestMqttAiDaemonThreadSafety:
         """Test that the lock is functional."""
         daemon = MqttAiDaemon(config_with_temp_files)
 
-        with daemon.lock:
+        with daemon.message_buffer.lock:
             # If we got here, the lock was acquired successfully
             assert True
 
@@ -366,18 +366,18 @@ class TestMqttAiDaemonThreadSafety:
         def writer():
             try:
                 for i in range(100):
-                    with daemon.lock:
-                        daemon.messages_deque.append(f"msg {i}")
-                        daemon.new_message_count += 1
+                    with daemon.message_buffer.lock:
+                        daemon.message_buffer.deque.append(f"msg {i}")
+                        daemon.message_buffer.new_count += 1
             except Exception as e:
                 errors.append(e)
 
         def reader():
             try:
                 for _ in range(100):
-                    with daemon.lock:
-                        _ = list(daemon.messages_deque)
-                        _ = daemon.new_message_count
+                    with daemon.message_buffer.lock:
+                        _ = list(daemon.message_buffer.deque)
+                        _ = daemon.message_buffer.new_count
             except Exception as e:
                 errors.append(e)
 
