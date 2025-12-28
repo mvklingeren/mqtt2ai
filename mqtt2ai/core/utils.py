@@ -37,14 +37,23 @@ def load_json_file(filepath: str, default: T) -> T:
 
 
 def save_json_file(filepath: str, data: Any) -> None:
-    """Save data to a JSON file with pretty formatting.
+    """Save data to a JSON file atomically with pretty formatting.
+
+    Uses a temp file + rename pattern to ensure readers never see
+    partial/empty files during writes. This prevents race conditions
+    where a reader might see a truncated file while a write is in progress.
 
     Args:
         filepath: Path to the JSON file
         data: Data to save (must be JSON serializable)
     """
-    with open(filepath, "w", encoding="utf-8") as f:
+    tmp_path = filepath + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())  # Ensure data is on disk before rename
+
+    os.replace(tmp_path, filepath)  # Atomic swap
 
 
 def _get_mqtt_client(host: str, port: int) -> Optional[mqtt.Client]:
