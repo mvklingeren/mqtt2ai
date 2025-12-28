@@ -4,18 +4,13 @@ This module contains the main MqttAiDaemon class that orchestrates
 the MQTT message collection, trigger analysis, and AI integration.
 """
 import collections
-import json
-import os
 import queue
 import select
 import sys
 import threading
 import time
 import logging
-import signal
-import fnmatch
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from collections import deque as Deque
 from typing import Optional
@@ -23,11 +18,13 @@ from typing import Optional
 from config import Config
 from knowledge_base import KnowledgeBase
 from mqtt_client import MqttClient
-from mqtt_simulator import MqttSimulator
 from ai_agent import AiAgent
+from ai_orchestrator import AiOrchestrator
+from mqtt_collector import MqttCollector, CollectorCallbacks
 from trigger_analyzer import TriggerAnalyzer, TriggerResult
-from event_bus import event_bus, EventType
+from event_bus import event_bus
 from telegram_bot import TelegramBot
+from telegram_handler import TelegramHandler
 from rule_engine import RuleEngine
 from device_state_tracker import DeviceStateTracker
 import tools
@@ -42,18 +39,6 @@ __  __  ___ _____ _____ ____    _    ___
  |_|  |_|\__\_\|_|   |_| |_____/_/   \_\___|
 """
 
-
-@dataclass
-class AiRequest:
-    """Represents a request for AI analysis."""
-    snapshot: str
-    reason: str
-    trigger_result: Optional[TriggerResult] = None
-    created_at: float = field(default_factory=time.time)
-
-    def is_expired(self, max_age_seconds: float = 30.0) -> bool:
-        """Check if this request is too old to be relevant."""
-        return (time.time() - self.created_at) > max_age_seconds
 
 # Context for dependency injection into tools
 @dataclass
@@ -153,40 +138,55 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
 
         self.ai_event = threading.Event()
         self.running = True
-        self.collector_thread: Optional[threading.Thread] = None
 
         # Graceful shutdown signaling from collector threads
         self.shutdown_event = threading.Event()
         self.shutdown_reason: Optional[str] = None
 
-        # AI worker thread and queue for async AI calls
-        # Use larger queue to handle bursts of events without dropping
-        self.ai_queue: queue.Queue[Optional[AiRequest]] = queue.Queue(maxsize=20)
-        self.ai_thread: Optional[threading.Thread] = None
-        # Removed ai_busy flag to rely on queue backpressure/buffering instead
-
-        # Keyboard input thread for manual triggers
-        self.keyboard_thread: Optional[threading.Thread] = None
-        self.manual_trigger = False  # Flag to track if trigger was manual
+        # AI orchestrator for async AI request processing
+        self.ai_orchestrator = AiOrchestrator(
+            ai_agent=self.ai,
+            knowledge_base=self.kb,
+            no_ai=config.no_ai
+        )
 
         # Trigger queue to decouple detection from main loop processing
         # Stores (trigger_result, timestamp) tuples
         self.trigger_queue: queue.Queue[tuple[TriggerResult, float]] = queue.Queue()
 
-        # Deduplication: track last queued trigger to avoid redundant requests
-        self._last_queued_trigger: Optional[tuple[str, str]] = None  # (topic, field)
+        # MQTT collector for message collection and trigger detection
+        self.collector = MqttCollector(
+            config=config,
+            mqtt_client=self.mqtt,
+            trigger_analyzer=self.trigger_analyzer,
+            device_tracker=self.device_tracker,
+            rule_engine=self.rule_engine,
+            knowledge_base=self.kb,
+            messages_deque=self.messages_deque,
+            lock=self.lock,
+            callbacks=CollectorCallbacks(
+                on_trigger=self._on_trigger,
+                on_shutdown=self._request_shutdown,
+                wait_for_ai=self.ai_orchestrator.wait_for_completion
+            )
+        )
 
-        # Queue for receiving MQTT messages from paho-mqtt subscription
-        # Tuple format: (topic, payload, is_retained)
-        self.mqtt_message_queue: queue.Queue[tuple[str, str, bool]] = queue.Queue()
+        # Keyboard input thread for manual triggers
+        self.keyboard_thread: Optional[threading.Thread] = None
+        self.manual_trigger = False  # Flag to track if trigger was manual
 
         # Telegram bot for bidirectional communication
         self.telegram_bot: Optional[TelegramBot] = None
         if config.telegram_enabled:
+            self.telegram_handler = TelegramHandler(
+                config=config,
+                ai_agent=self.ai,
+                device_tracker=self.device_tracker
+            )
             self.telegram_bot = TelegramBot(
                 config,
                 device_tracker=self.device_tracker,
-                on_user_message=self._handle_telegram_message
+                on_user_message=self.telegram_handler.handle_message
             )
             # Connect Telegram bot to AI agent for alert notifications
             self.ai.set_telegram_bot(self.telegram_bot)
@@ -203,6 +203,19 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         self.running = False
         self.shutdown_event.set()
         self.ai_event.set()  # Wake up main loop
+
+    def _on_trigger(self, trigger_result: TriggerResult, timestamp: float):
+        """Handle a trigger detected by the collector.
+        
+        This callback is invoked by the MqttCollector when a trigger is detected
+        and no rule matched. It queues the trigger for AI processing.
+        
+        Args:
+            trigger_result: The trigger detection result
+            timestamp: When the trigger was detected
+        """
+        self.trigger_queue.put((trigger_result, timestamp))
+        self.ai_event.set()
 
     def start(self):
         """Start the daemon."""
@@ -245,12 +258,8 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 "Will retry on first publish."
             )
 
-        # Start AI worker thread (processes AI requests asynchronously)
-        if not self.config.no_ai:
-            self.ai_thread = threading.Thread(
-                target=self._ai_worker_loop, daemon=True, name="AI-Worker"
-            )
-            self.ai_thread.start()
+        # Start AI orchestrator (processes AI requests asynchronously)
+        self.ai_orchestrator.start()
 
         # Start keyboard input thread for manual triggers
         self.keyboard_thread = threading.Thread(
@@ -265,16 +274,8 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             else:
                 logging.warning("Telegram bot failed to start")
 
-        # Start collector (simulation or real MQTT)
-        if self.config.simulation_file:
-            self.collector_thread = threading.Thread(
-                target=self._simulation_collector_loop, daemon=True, name="Simulation-Collector"
-            )
-        else:
-            self.collector_thread = threading.Thread(
-                target=self._collector_loop, daemon=True, name="MQTT-Collector"
-            )
-        self.collector_thread.start()
+        # Start MQTT collector (handles real MQTT or simulation)
+        self.collector.start()
 
         if self.config.no_ai:
             logging.info("Daemon started in NO-AI MODE (logging only, no AI calls)")
@@ -297,7 +298,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         last_check_time = time.time()
 
         try:
-            while self.running and self.collector_thread.is_alive():
+            while self.running and self.collector.is_alive():
                 # Wait for trigger or timeout (1s)
                 self.ai_event.wait(timeout=1.0)
 
@@ -334,7 +335,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                             snapshot = self._create_filtered_snapshot()
 
                         if snapshot:
-                            self._handle_ai_check(snapshot, reason, trigger_result)
+                            self.ai_orchestrator.queue_request(snapshot, reason, trigger_result)
                             triggers_processed += 1
                     except queue.Empty:
                         break
@@ -355,7 +356,7 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                         last_check_time = time.time()
 
                     if snapshot:
-                        self._handle_ai_check(snapshot, reason, None)
+                        self.ai_orchestrator.queue_request(snapshot, reason, None)
 
         except KeyboardInterrupt:
             logging.info("Stopping daemon (KeyboardInterrupt)...")
@@ -422,195 +423,15 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 # Stdin might not be available (e.g., when running as service)
                 time.sleep(1.0)
 
-    def _handle_telegram_message(self, chat_id: int, message: str) -> str:
-        """Handle incoming Telegram messages from authorized users.
-
-        This callback is invoked by the TelegramBot when a user sends a message.
-        It processes the message through the AI agent and returns the response.
-
-        Args:
-            chat_id: The Telegram chat ID of the sender
-            message: The message text from the user
-
-        Returns:
-            Response text to send back to the user
-        """
-        if self.config.no_ai:
-            return (
-                "AI is disabled in NO-AI mode. "
-                "Restart without --no-ai to enable commands."
-            )
-
-        logging.info(
-            "Processing Telegram request from %d: %s",
-            chat_id, message[:50]
-        )
-
-        # Build context with device states for the AI
-        device_states = {}
-        if self.device_tracker:
-            device_states = self.device_tracker.get_all_states()
-
-        # Create a focused prompt for the user's request
-        prompt = self._build_telegram_prompt(message, device_states)
-
-        # Use the AI agent to process the request synchronously
-        try:
-            response = self.ai.process_telegram_query(prompt, message)
-            return response
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logging.error("Error processing Telegram message: %s", e)
-            return f"❌ Error: {e}"
-
-    def _build_telegram_prompt(self, user_message: str, device_states: dict) -> str:
-        """Build a prompt for processing a Telegram user request.
-
-        Args:
-            user_message: The user's message/command
-            device_states: Current device states from the tracker
-
-        Returns:
-            Formatted prompt string for the AI
-        """
-        lines = [
-            "# User Request via Telegram",
-            "",
-            f"**User says:** {user_message}",
-            "",
-            "## Available Devices",
-        ]
-
-        if device_states:
-            for topic, state in sorted(device_states.items())[:30]:
-                # Compact state for token efficiency
-                state_copy = {k: v for k, v in state.items() if k != '_updated'}
-                state_str = json.dumps(state_copy, separators=(',', ':'))
-                if len(state_str) > 80:
-                    state_str = state_str[:77] + "..."
-                lines.append(f"- {topic}: {state_str}")
-        else:
-            lines.append("(No devices tracked yet)")
-
-        lines.extend([
-            "",
-            "## Instructions",
-            "Respond to the user's request. Use send_mqtt_message to control devices.",
-            "Keep responses concise for Telegram (max 200 chars unless detailed info requested).",
-            "Use device-friendly names when referring to devices.",
-        ])
-
-        return "\n".join(lines)
-
-    def _handle_ai_check(
-        self,
-        snapshot: str,
-        reason: str,
-        trigger_result: Optional[TriggerResult] = None
-    ):
-        """Handle the AI check based on mode."""
-        if self.config.no_ai:
-            logging.info(
-                "[NO-AI MODE] Would have triggered AI check (reason: %s), %d messages",
-                reason,
-                len(snapshot.splitlines())
-            )
-        else:
-            # Queue the AI request for async processing
-            # We don't check busy status anymore, relying on queue buffer
-
-            # Deduplicate: skip if same topic/field as last queued trigger
-            if trigger_result and trigger_result.topic and trigger_result.field_name:
-                trigger_key = (trigger_result.topic, trigger_result.field_name)
-                if trigger_key == self._last_queued_trigger:
-                    logging.debug(
-                        "Deduplicating trigger for %s[%s]",
-                        trigger_result.topic, trigger_result.field_name
-                    )
-                    return
-                self._last_queued_trigger = trigger_key
-
-            request = AiRequest(
-                snapshot=snapshot, reason=reason, trigger_result=trigger_result
-            )
-            try:
-                self.ai_queue.put_nowait(request)
-                logging.debug("Queued AI request (reason: %s)", reason)
-            except queue.Full:
-                logging.warning(
-                    "AI queue full (size=%d), dropping request (reason: %s)",
-                    self.ai_queue.maxsize, reason
-                )
-
-    def _ai_worker_loop(self):
-        """Background thread that processes AI requests from the queue."""
-        logging.info("AI worker thread started")
-
-        while self.running:
-            try:
-                # Wait for a request with timeout to allow checking self.running
-                request = self.ai_queue.get(timeout=1.0)
-
-                # None is the shutdown signal
-                if request is None:
-                    logging.debug("AI worker received shutdown signal")
-                    break
-
-                # Skip expired requests to avoid processing stale data
-                if request.is_expired():
-                    age = time.time() - request.created_at
-                    logging.info(
-                        "Skipping expired AI request (age: %.1fs, reason: %s)",
-                        age, request.reason
-                    )
-                    self.ai_queue.task_done()
-                    continue
-
-                try:
-                    # Reload knowledge base to get any updates
-                    self.kb.load_all()
-                    self.ai.run_analysis(
-                        request.snapshot, self.kb, request.reason,
-                        request.trigger_result
-                    )
-                finally:
-                    self.ai_queue.task_done()
-
-            except queue.Empty:
-                # Timeout, just continue to check self.running
-                continue
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                logging.error("AI worker error: %s", e)
-
-        logging.info("AI worker thread stopped")
-
-    def _wait_for_ai_completion(self, timeout: float = 60.0):
-        """Wait for the AI worker to finish processing the current request.
-
-        Used in simulation mode to ensure deterministic pattern learning
-        by waiting for each trigger to be fully processed before continuing.
-        """
-        # Wait for queue to be empty
-        start_wait = time.time()
-        while not self.ai_queue.empty() and self.running:
-            if time.time() - start_wait > timeout:
-                logging.warning("AI completion wait timed out (queue not empty)")
-                return
-            time.sleep(0.1)
-
-        # Then join the queue to ensure current task is done
-        self.ai_queue.join()
-
     def _shutdown(self):
         """Gracefully shutdown the daemon and its threads."""
         self.running = False
 
-        # Signal the AI worker thread to stop
-        if self.ai_thread and self.ai_thread.is_alive():
-            logging.debug("Signaling AI worker to stop...")
-            self.ai_queue.put(None)  # Shutdown signal
-            self.ai_thread.join(timeout=5.0)
-            if self.ai_thread.is_alive():
-                logging.warning("AI worker thread did not stop in time")
+        # Stop collector
+        self.collector.stop()
+
+        # Stop AI orchestrator
+        self.ai_orchestrator.stop()
 
         # Stop Telegram bot
         if self.telegram_bot:
@@ -621,258 +442,3 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
         self.mqtt.disconnect()
 
         logging.info("Daemon shutdown complete")
-
-    def _collector_loop(self):  # pylint: disable=too-many-branches,too-many-statements
-        """Background thread that collects MQTT messages via paho-mqtt subscription."""
-        logging.info("Starting MQTT collector...")
-
-        try:
-            # Subscribe to topics using paho-mqtt
-            if not self.mqtt.subscribe(
-                self.config.mqtt_topics,
-                self.mqtt_message_queue
-            ):
-                logging.critical("Failed to subscribe to MQTT topics")
-                self._request_shutdown("Failed to subscribe to MQTT topics")
-                return
-
-            while self.running:
-                # Get message from queue with timeout to allow checking self.running
-                try:
-                    current_topic, current_payload, is_retained = self.mqtt_message_queue.get(
-                        timeout=1.0
-                    )
-                except queue.Empty:
-                    continue
-
-                # 1. Topic Filtering (Prefixes)
-                if any(
-                    current_topic.startswith(p)
-                    for p in self.config.ignore_printing_prefixes
-                ):
-                    continue
-
-                # 2. Payload validation
-                if not current_payload or not current_payload.isprintable():
-                    continue
-
-                # Build display line (topic + payload format for consistency)
-                line = f"{current_topic} {current_payload}"
-
-                # 3. Display Logic
-                should_print = current_topic not in self.config.ignore_printing_topics
-
-                # 4. Analysis
-                trigger_result = self.trigger_analyzer.analyze(
-                    current_topic, current_payload
-                )
-
-                is_trigger_line = False
-                if trigger_result.should_trigger:
-                    self._print_trigger(trigger_result, line)
-
-                    # Try direct rule execution first (fast path, no AI)
-                    # Reload knowledge base to get latest rules
-                    self.kb.load_all()
-                    rule_handled = self.rule_engine.check_and_execute(
-                        current_topic, current_payload, trigger_result
-                    )
-
-                    if not rule_handled:
-                        # No rule matched - queue for AI (pattern learning or anomaly)
-                        # Push to trigger queue for processing by main loop
-                        self.trigger_queue.put((trigger_result, time.time()))
-                        self.ai_event.set()
-
-                    is_trigger_line = True
-
-                # Verbose printing for non-trigger lines
-                if should_print and not is_trigger_line and self.config.verbose:
-                    if self.config.compress_output:
-                        compressed = self._compress_line(line)
-                        if compressed:  # Skip if fully compressed to nothing
-                            print(f"{timestamp()} {compressed}")
-                    else:
-                        print(f"{timestamp()} {line}")
-
-                # 5. Update device tracker
-                self.device_tracker.update(current_topic, current_payload)
-
-                # 6. Store with [RETAINED] prefix for retained messages
-                # Retained messages represent historical state, not new events,
-                # and are excluded from AI analysis snapshots
-                if is_retained:
-                    msg_prefix = "[RETAINED] "
-                else:
-                    msg_prefix = ""
-
-                with self.lock:
-                    self.messages_deque.append(f"{msg_prefix}{timestamp()} {line}")
-                    self.new_message_count += 1
-
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logging.error("Collector thread error: %s", e)
-
-    def _simulation_collector_loop(self):  # pylint: disable=too-many-branches,too-many-statements
-        """Background thread that replays simulated MQTT messages from a scenario file."""
-        logging.info(
-            "Starting SIMULATION collector from '%s'...",
-            self.config.simulation_file
-        )
-
-        try:
-            simulator = MqttSimulator(
-                self.config.simulation_file,
-                self.config.simulation_speed
-            )
-
-            for topic, payload in simulator.run_simulation():
-                if not self.running:
-                    break
-
-                # Skip ignored prefixes
-                if any(
-                    topic.startswith(p)
-                    for p in self.config.ignore_printing_prefixes
-                ):
-                    continue
-
-                # Build the line in mosquitto_sub format: "topic payload"
-                line = f"{topic} {payload}"
-
-                current_topic = topic
-                current_payload = payload
-
-                if not current_payload or not current_payload.isprintable():
-                    continue
-
-                # Display Logic
-                should_print = current_topic not in self.config.ignore_printing_topics
-
-                # Analysis
-                trigger_result = self.trigger_analyzer.analyze(
-                    current_topic, current_payload
-                )
-
-                is_trigger_line = False
-                if trigger_result.should_trigger:
-                    self._print_trigger(trigger_result, line)
-
-                    # Publish TRIGGER_FIRED event for validation
-                    event_bus.publish(EventType.TRIGGER_FIRED, {
-                        "topic": current_topic,
-                        "field": trigger_result.field_name,
-                        "old_value": trigger_result.old_value,
-                        "new_value": trigger_result.new_value
-                    })
-
-                    # Try direct rule execution first (fast path, no AI)
-                    # Reload knowledge base to get latest rules
-                    self.kb.load_all()
-                    rule_handled = self.rule_engine.check_and_execute(
-                        current_topic, current_payload, trigger_result
-                    )
-
-                    if not rule_handled:
-                        # No rule matched - queue for AI (pattern learning or anomaly)
-                        # Publish RULE_NOT_MATCHED event for validation
-                        event_bus.publish(EventType.RULE_NOT_MATCHED, {
-                            "trigger_topic": current_topic,
-                            "trigger_field": trigger_result.field_name
-                        })
-
-                        # Push to trigger queue
-                        self.trigger_queue.put((trigger_result, time.time()))
-                        self.ai_event.set()
-
-                        # In simulation mode, wait for AI to finish before continuing
-                        # This ensures deterministic pattern learning
-                        if not self.config.no_ai:
-                            self._wait_for_ai_completion()
-
-                    is_trigger_line = True
-
-                # Verbose printing for non-trigger lines
-                if should_print and not is_trigger_line and self.config.verbose:
-                    if self.config.compress_output:
-                        compressed = self._compress_line(line)
-                        if compressed:  # Skip if fully compressed to nothing
-                            print(f"{timestamp()} {compressed}")
-                    else:
-                        print(f"{timestamp()} {line}")
-
-                # Update device tracker
-                self.device_tracker.update(current_topic, current_payload)
-
-                # Store
-                with self.lock:
-                    self.messages_deque.append(f"{timestamp()} {line}")
-                    self.new_message_count += 1
-
-            # Simulation complete - wait for any pending AI analysis
-            logging.info("Simulation complete. Waiting for AI to finish processing...")
-
-            # Give AI time to process final messages
-            time.sleep(2.0)
-
-            # Wait for AI queue to be empty
-            if not self.config.no_ai:
-                self.ai_queue.join()
-
-            # Publish SIMULATION_COMPLETE event for validation
-            event_bus.publish(EventType.SIMULATION_COMPLETE, {
-                "total_messages": len(self.messages_deque)
-            })
-
-            logging.info("All AI processing complete. Shutting down...")
-            self.running = False
-
-        except FileNotFoundError as e:
-            logging.critical("CRITICAL: Scenario file not found: %s", e)
-            self._request_shutdown(f"Scenario file not found: {e}")
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logging.error("Simulation collector error: %s", e)
-            self.running = False
-
-    def _compress_line(self, line: str) -> Optional[str]:
-        """Compress a single MQTT message line by removing noise fields.
-        Returns None if the line has no relevant fields after compression.
-        """
-        try:
-            json_start = line.find('{')
-            if json_start == -1:
-                return line  # No JSON, keep as-is
-
-            prefix = line[:json_start]
-            json_str = line[json_start:]
-
-            payload = json.loads(json_str)
-            if isinstance(payload, dict):
-                filtered = {
-                    k: v for k, v in payload.items()
-                    if k not in AiAgent.REMOVE_FIELDS
-                    and v is not None
-                    and not isinstance(v, dict)
-                }
-                if filtered:
-                    return f"{prefix}{json.dumps(filtered, separators=(',', ':'))}"
-                return None  # All fields were noise
-            return line
-        except json.JSONDecodeError:
-            return line
-
-    def _print_trigger(self, trigger_result, line: str):
-        """Print a formatted trigger notification."""
-        yellow, bold, reset = "\033[93m", "\033[1m", "\033[0m"
-        display_line = self._compress_line(line) if self.config.compress_output else line
-        if display_line is None:
-            display_line = line  # Fallback to original if fully compressed
-        print(f"{timestamp()} {display_line}")
-        print(
-            f"{timestamp()} {bold}{yellow}"
-            f">>> SMART TRIGGER: {trigger_result.reason} <<<{reset}"
-        )
-        print(
-            f"           {yellow}Field: {trigger_result.field_name}, "
-            f"Change: {trigger_result.old_value} -> {trigger_result.new_value}{reset}"
-        )
