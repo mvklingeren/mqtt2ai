@@ -15,10 +15,6 @@ import paho.mqtt.client as mqtt
 
 T = TypeVar('T')
 
-# Default MQTT configuration - can be overridden by callers
-DEFAULT_MQTT_HOST = "192.168.1.245"
-DEFAULT_MQTT_PORT = "1883"
-
 # Module-level client for connection reuse (lazy initialized)
 _MQTT_CLIENT: Optional[mqtt.Client] = None
 
@@ -79,8 +75,8 @@ def _get_mqtt_client(host: str, port: int) -> Optional[mqtt.Client]:
 def publish_mqtt(
     topic: str,
     payload: dict,
-    host: str = DEFAULT_MQTT_HOST,
-    port: str = DEFAULT_MQTT_PORT
+    host: str,
+    port: str
 ) -> bool:
     """Publish a message to an MQTT topic using paho-mqtt.
 

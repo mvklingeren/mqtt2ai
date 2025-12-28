@@ -214,7 +214,7 @@ class TestPublishMqtt:
 
     def test_publish_mqtt_success(self, mock_paho_client):
         """Test successful MQTT publish."""
-        result = publish_mqtt("test/topic", {"state": "ON"})
+        result = publish_mqtt("test/topic", {"state": "ON"}, host="localhost", port="1883")
 
         assert result is True
         mock_paho_client.publish.assert_called_once()
@@ -235,7 +235,7 @@ class TestPublishMqtt:
     def test_publish_mqtt_serializes_payload(self, mock_paho_client):
         """Test that payload is JSON serialized."""
         payload = {"key": "value", "number": 42}
-        publish_mqtt("test/topic", payload)
+        publish_mqtt("test/topic", payload, host="localhost", port="1883")
 
         call_args = mock_paho_client.publish.call_args[0]
         sent_payload = call_args[1]
@@ -248,7 +248,7 @@ class TestPublishMqtt:
         """Test MQTT publish when connection fails."""
         with patch("utils.mqtt.Client") as mock_client_class:
             mock_client_class.return_value.connect.side_effect = Exception("Connection refused")
-            result = publish_mqtt("test/topic", {"state": "ON"})
+            result = publish_mqtt("test/topic", {"state": "ON"}, host="localhost", port="1883")
 
         assert result is False
 
@@ -257,20 +257,20 @@ class TestPublishMqtt:
         mock_result = mock_paho_client.publish.return_value
         mock_result.rc = 1  # Not SUCCESS
 
-        result = publish_mqtt("test/topic", {"state": "ON"})
+        result = publish_mqtt("test/topic", {"state": "ON"}, host="localhost", port="1883")
 
         assert result is False
 
     def test_publish_mqtt_uses_qos_1(self, mock_paho_client):
         """Test that publish uses QoS 1."""
-        publish_mqtt("test/topic", {"state": "ON"})
+        publish_mqtt("test/topic", {"state": "ON"}, host="localhost", port="1883")
 
         call_kwargs = mock_paho_client.publish.call_args[1]
         assert call_kwargs.get("qos") == 1
 
     def test_publish_mqtt_correct_topic(self, mock_paho_client):
         """Test that correct topic is used."""
-        publish_mqtt("zigbee2mqtt/light/set", {"state": "ON"})
+        publish_mqtt("zigbee2mqtt/light/set", {"state": "ON"}, host="localhost", port="1883")
 
         call_args = mock_paho_client.publish.call_args[0]
         assert call_args[0] == "zigbee2mqtt/light/set"
