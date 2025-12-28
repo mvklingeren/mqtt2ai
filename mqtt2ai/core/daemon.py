@@ -11,7 +11,6 @@ import sys
 import threading
 import time
 import logging
-from dataclasses import dataclass
 from datetime import datetime
 from collections import deque as Deque
 from typing import Dict, Optional
@@ -33,7 +32,6 @@ from mqtt2ai.telegram.bot import TelegramBot
 from mqtt2ai.telegram.handler import TelegramHandler
 from mqtt2ai.rules.engine import RuleEngine
 from mqtt2ai.rules.device_tracker import DeviceStateTracker
-from mqtt2ai.ai import tools
 
 VERSION = "0.2"
 
@@ -44,14 +42,6 @@ __  __  ___ _____ _____ ____    _    ___
 | | |  | | |_| || |   | |  / __// ___ \ | |
 | |_|  |_|\__\_\|_|   |_| |_____/_/   \_\___|
 """
-
-
-# Context for dependency injection into tools
-@dataclass
-class RuntimeContext:
-    """Holds runtime dependencies for injection."""
-    mqtt_client: 'MqttClient'
-    device_tracker: 'DeviceStateTracker'
 
 
 def setup_logging(config: Config):
@@ -132,8 +122,6 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             simulation_mode=bool(config.simulation_file)
         )
 
-        # Inject disable_new_rules setting into tools
-        tools.set_disable_new_rules(config.disable_new_rules)
 
         # Rule engine for direct execution of learned rules (no AI needed)
         self.rule_engine = RuleEngine(self.mqtt, self.kb)
@@ -196,8 +184,6 @@ class MqttAiDaemon:  # pylint: disable=too-many-instance-attributes,too-few-publ
             )
             # Connect Telegram bot to AI agent for alert notifications
             self.ai.set_telegram_bot(self.telegram_bot)
-            # Set global reference for tools module
-            tools.set_telegram_bot(self.telegram_bot)
 
         # Test mode: load assertions from scenario file
         self._scenario_assertions: Dict[str, dict] = {}

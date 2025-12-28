@@ -4,12 +4,13 @@ This module provides a RuntimeContext class that holds shared dependencies,
 enabling proper dependency injection for better testability and reducing
 reliance on global state.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from mqtt2ai.mqtt.client import MqttClient
     from mqtt2ai.core.config import Config
+    from mqtt2ai.telegram.bot import TelegramBot
 
 
 @dataclass
@@ -28,11 +29,15 @@ class RuntimeContext:
         device_tracker: Device state tracker for alert context
         ai_agent: AI agent for processing alerts
         config: Application configuration
+        telegram_bot: Telegram bot for sending messages
+        disable_new_rules: Whether new rules are created disabled by default
     """
     mqtt_client: Optional['MqttClient'] = None
     device_tracker: Optional[object] = None  # DeviceStateTracker
     ai_agent: Optional[object] = None  # AiAgent
     config: Optional['Config'] = None
+    telegram_bot: Optional['TelegramBot'] = None
+    disable_new_rules: bool = False
 
 
 # Module-level context instance (singleton pattern for backward compatibility)
@@ -62,7 +67,9 @@ def create_context(
     mqtt_client: Optional['MqttClient'] = None,
     device_tracker: Optional[object] = None,
     ai_agent: Optional[object] = None,
-    config: Optional['Config'] = None
+    config: Optional['Config'] = None,
+    telegram_bot: Optional['TelegramBot'] = None,
+    disable_new_rules: bool = False
 ) -> RuntimeContext:
     """Create and set a new runtime context.
 
@@ -74,6 +81,8 @@ def create_context(
         device_tracker: Device state tracker for alert context
         ai_agent: AI agent for processing alerts
         config: Application configuration
+        telegram_bot: Telegram bot for sending messages
+        disable_new_rules: Whether new rules are created disabled by default
 
     Returns:
         The newly created RuntimeContext instance.
@@ -82,7 +91,9 @@ def create_context(
         mqtt_client=mqtt_client,
         device_tracker=device_tracker,
         ai_agent=ai_agent,
-        config=config
+        config=config,
+        telegram_bot=telegram_bot,
+        disable_new_rules=disable_new_rules
     )
     set_context(ctx)
     return ctx

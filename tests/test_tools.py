@@ -10,6 +10,7 @@ import pytest
 # Import the functions we want to test (after setting up mocks)
 from mqtt2ai.ai.tools import (
     send_mqtt_message,
+    send_telegram_message,
     create_rule,
     get_learned_rules,
     record_pattern_observation,
@@ -24,6 +25,7 @@ from mqtt2ai.ai.tools import (
     _clear_pending_pattern,
     _is_pattern_rejected,
     _add_rejected_pattern,
+    ToolHandler,
     LEARNED_RULES_FILE,
     PENDING_PATTERNS_FILE,
     REJECTED_PATTERNS_FILE,
@@ -51,9 +53,11 @@ def mock_files(temp_dir, monkeypatch):
 
 # Mock RuntimeContext for tests
 class MockRuntimeContext:
-    def __init__(self, mqtt_client_mock):
+    def __init__(self, mqtt_client_mock, telegram_bot=None, disable_new_rules=False):
         self.mqtt_client = mqtt_client_mock
-        self.device_tracker = MagicMock() # Device tracker not directly used by tools here
+        self.device_tracker = MagicMock()  # Device tracker not directly used by tools here
+        self.telegram_bot = telegram_bot
+        self.disable_new_rules = disable_new_rules
 
 @pytest.fixture
 def mock_context():
@@ -695,3 +699,158 @@ class TestHelperFunctions:
         # Should only have one pattern left
         assert len(data["patterns"]) == 1
         assert data["patterns"][0]["trigger_topic"] == "zigbee2mqtt/pir_b"
+
+
+class TestSendTelegramMessage:
+    """Tests for send_telegram_message function."""
+
+    def test_send_telegram_message_success(self):
+        """Test successful Telegram message sending."""
+        mock_bot = MagicMock()
+        mock_bot.broadcast_message.return_value = 2
+        context = MockRuntimeContext(MagicMock(), telegram_bot=mock_bot)
+
+        result = send_telegram_message("Hello, world!", context=context)
+
+        assert "Successfully" in result
+        assert "2 user(s)" in result
+        mock_bot.broadcast_message.assert_called_once_with("Hello, world!")
+
+    def test_send_telegram_message_no_bot(self):
+        """Test Telegram message when bot is not configured."""
+        context = MockRuntimeContext(MagicMock(), telegram_bot=None)
+
+        result = send_telegram_message("Hello", context=context)
+
+        assert "Error" in result
+        assert "not configured" in result
+
+    def test_send_telegram_message_no_context(self):
+        """Test Telegram message when no context is provided."""
+        result = send_telegram_message("Hello")
+
+        assert "Error" in result
+        assert "not configured" in result
+
+    def test_send_telegram_message_no_recipients(self):
+        """Test Telegram message when no users receive it."""
+        mock_bot = MagicMock()
+        mock_bot.broadcast_message.return_value = 0
+        context = MockRuntimeContext(MagicMock(), telegram_bot=mock_bot)
+
+        result = send_telegram_message("Hello", context=context)
+
+        assert "Error" in result
+        assert "no authorized chats" in result.lower()
+
+
+class TestToolHandler:
+    """Tests for the ToolHandler class."""
+
+    def test_tool_handler_send_mqtt_message(self):
+        """Test ToolHandler.send_mqtt_message."""
+        mock_client = MagicMock()
+        mock_client.publish.return_value = True
+        context = MockRuntimeContext(mock_client)
+        handler = ToolHandler(context)
+
+        result = handler.send_mqtt_message("test/topic", '{"state": "ON"}')
+
+        assert "Successfully" in result
+        mock_client.publish.assert_called_once()
+
+    def test_tool_handler_send_telegram_message(self):
+        """Test ToolHandler.send_telegram_message."""
+        mock_bot = MagicMock()
+        mock_bot.broadcast_message.return_value = 1
+        context = MockRuntimeContext(MagicMock(), telegram_bot=mock_bot)
+        handler = ToolHandler(context)
+
+        result = handler.send_telegram_message("Test message")
+
+        assert "Successfully" in result
+        mock_bot.broadcast_message.assert_called_once_with("Test message")
+
+    def test_tool_handler_create_rule_respects_disable_new_rules(self, mock_files):
+        """Test that ToolHandler.create_rule respects disable_new_rules setting."""
+        context = MockRuntimeContext(MagicMock(), disable_new_rules=True)
+        handler = ToolHandler(context)
+
+        handler.create_rule(
+            rule_id="disabled_rule",
+            trigger_topic="zigbee2mqtt/pir",
+            trigger_field="occupancy",
+            trigger_value="true",
+            action_topic="zigbee2mqtt/light/set",
+            action_payload='{"state": "ON"}',
+            avg_delay_seconds=2.0,
+            tolerance_seconds=1.0
+        )
+
+        with open(mock_files["learned_rules"], "r") as f:
+            data = json.load(f)
+        # Rule should be created disabled
+        assert data["rules"][0]["enabled"] is False
+
+    def test_tool_handler_delegates_to_standalone_functions(self, mock_files):
+        """Test that ToolHandler methods delegate to standalone functions."""
+        context = MockRuntimeContext(MagicMock())
+        handler = ToolHandler(context)
+
+        # Test record_pattern_observation delegation
+        result = handler.record_pattern_observation(
+            "zigbee2mqtt/pir", "occupancy", "zigbee2mqtt/light/set", 2.0
+        )
+        assert "1/3" in result
+
+        # Test get_pending_patterns delegation
+        result = handler.get_pending_patterns()
+        data = json.loads(result)
+        assert len(data["patterns"]) == 1
+
+        # Test clear_pending_patterns delegation
+        result = handler.clear_pending_patterns()
+        assert "cleared" in result.lower()
+
+
+class TestCreateRuleWithContext:
+    """Tests for create_rule function with context parameter."""
+
+    def test_create_rule_with_disable_new_rules_context(self, mock_files):
+        """Test that create_rule respects disable_new_rules from context."""
+        context = MockRuntimeContext(MagicMock(), disable_new_rules=True)
+
+        create_rule(
+            rule_id="context_test_rule",
+            trigger_topic="zigbee2mqtt/pir",
+            trigger_field="occupancy",
+            trigger_value="true",
+            action_topic="zigbee2mqtt/light/set",
+            action_payload='{"state": "ON"}',
+            avg_delay_seconds=2.0,
+            tolerance_seconds=1.0,
+            context=context
+        )
+
+        with open(mock_files["learned_rules"], "r") as f:
+            data = json.load(f)
+        # Rule should be created disabled due to context setting
+        assert data["rules"][0]["enabled"] is False
+
+    def test_create_rule_enabled_by_default_without_context(self, mock_files):
+        """Test that create_rule enables rules by default without context."""
+        create_rule(
+            rule_id="default_test_rule",
+            trigger_topic="zigbee2mqtt/pir",
+            trigger_field="occupancy",
+            trigger_value="true",
+            action_topic="zigbee2mqtt/light/set",
+            action_payload='{"state": "ON"}',
+            avg_delay_seconds=2.0,
+            tolerance_seconds=1.0
+        )
+
+        with open(mock_files["learned_rules"], "r") as f:
+            data = json.load(f)
+        # Rule should be enabled by default
+        assert data["rules"][0]["enabled"] is True

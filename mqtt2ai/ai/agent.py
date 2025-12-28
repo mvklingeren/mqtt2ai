@@ -61,6 +61,7 @@ class AiAgent:
         self.event_bus = event_bus
         self.device_tracker = device_tracker
         self.mqtt_client = mqtt_client
+        self.telegram_bot = None  # Set later via set_telegram_bot
         self.prompt_builder = PromptBuilder(config)
         self.alert_handler = AlertHandler(config, self, device_tracker)
         self.ai_provider_instance = self._initialize_ai_provider()
@@ -71,6 +72,7 @@ class AiAgent:
         Args:
             telegram_bot: The TelegramBot instance
         """
+        self.telegram_bot = telegram_bot
         self.alert_handler.set_telegram_bot(telegram_bot)
 
     def _initialize_ai_provider(self):
@@ -143,19 +145,30 @@ class AiAgent:
 
         announce_topic = "mqtt2ai/action/announce"
         try:
-            ctx = RuntimeContext(mqtt_client=self.mqtt_client)
+            ctx = self._create_runtime_context()
             tools.send_mqtt_message(announce_topic, json.dumps(announcement), context=ctx)
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.warning("Failed to publish AI action announcement: %s", e)
 
+    def _create_runtime_context(self) -> RuntimeContext:
+        """Create a RuntimeContext with current dependencies."""
+        return RuntimeContext(
+            mqtt_client=self.mqtt_client,
+            device_tracker=self.device_tracker,
+            telegram_bot=self.telegram_bot,
+            disable_new_rules=self.config.disable_new_rules
+        )
+
     def execute_tool_call(self, tool_name: str, arguments: dict) -> str:
         """Execute a tool and return the result."""
         # Publish AI_TOOL_CALLED event
-
         event_bus.publish(EventType.AI_TOOL_CALLED, {
             "tool": tool_name,
             "arguments": arguments
         })
+
+        # Create runtime context for tool execution
+        ctx = self._create_runtime_context()
 
         # For send_mqtt_message, publish announcement first
         if tool_name == "send_mqtt_message":
@@ -167,7 +180,6 @@ class AiAgent:
                 self._announce_ai_action(topic, payload)
 
             try:
-                ctx = RuntimeContext(mqtt_client=self.mqtt_client)
                 return tools.send_mqtt_message(topic, payload, context=ctx)
             except Exception as e:  # pylint: disable=broad-exception-caught
                 return f"Error executing {tool_name}: {e}"
@@ -180,7 +192,8 @@ class AiAgent:
             "create_rule": lambda args: tools.create_rule(
                 args["rule_id"], args["trigger_topic"], args["trigger_field"],
                 args["trigger_value"], args["action_topic"], args["action_payload"],
-                args["avg_delay_seconds"], args["tolerance_seconds"]
+                args["avg_delay_seconds"], args["tolerance_seconds"],
+                context=ctx
             ),
             "reject_pattern": lambda args: tools.reject_pattern(
                 args["trigger_topic"], args["trigger_field"],
@@ -196,7 +209,7 @@ class AiAgent:
                 args["severity"], args["reason"], args.get("context")
             ),
             "send_telegram_message": lambda args: tools.send_telegram_message(
-                args["message"]
+                args["message"], context=ctx
             ),
         }
 
