@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from mqtt2ai.telegram.bot import TelegramBot
 
 from mqtt2ai.ai.tool_definitions import OPENAI_TOOLS
+from mqtt2ai.core.constants import MqttTopics
 
 class AlertHandler:
     """Handles security alerts and coordinates AI responses."""
@@ -78,7 +79,7 @@ class AlertHandler:
                 # Send via MQTT
                 self.ai_agent.execute_tool_call(
                     "send_mqtt_message",
-                    {"topic": "mqtt2ai/alerts", "payload": json.dumps(notification)}
+                    {"topic": MqttTopics.ALERTS, "payload": json.dumps(notification)}
                 )
 
                 return f"Alert notification sent (severity {severity:.1f}): {reason}"

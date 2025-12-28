@@ -3,20 +3,17 @@
 This module contains common utilities used across multiple modules,
 eliminating code duplication for JSON file operations and MQTT publishing.
 """
-import json
-import sys
-from typing import Any, Optional, TypeVar
-import os
 import hashlib
-from datetime import datetime
+import json
 import logging
+import os
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
-import paho.mqtt.client as mqtt
+if TYPE_CHECKING:
+    from mqtt2ai.mqtt.client import MqttClient
 
 T = TypeVar('T')
-
-# Module-level client for connection reuse (lazy initialized)
-_MQTT_CLIENT: Optional[mqtt.Client] = None
 
 
 def load_json_file(filepath: str, default: T) -> T:
@@ -56,66 +53,39 @@ def save_json_file(filepath: str, data: Any) -> None:
     os.replace(tmp_path, filepath)  # Atomic swap
 
 
-def _get_mqtt_client(host: str, port: int) -> Optional[mqtt.Client]:
-    """Get or create the module-level MQTT client.
-
-    Uses a simple synchronous connection for one-off publishes.
-    For high-frequency publishing, use MqttClient class instead.
-    """
-    global _MQTT_CLIENT
-
-    if _MQTT_CLIENT is not None:
-        return _MQTT_CLIENT
-
-    try:
-        client = mqtt.Client(
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-            protocol=mqtt.MQTTv311
-        )
-        client.connect(host, port, keepalive=60)
-        client.loop_start()
-        _MQTT_CLIENT = client
-        return client
-    except Exception as e:
-        print(f"Error connecting to MQTT broker: {e}", file=sys.stderr)
-        return None
-
-
 def publish_mqtt(
     topic: str,
     payload: dict,
-    host: str,
-    port: str
+    mqtt_client: Optional['MqttClient'] = None
 ) -> bool:
-    """Publish a message to an MQTT topic using paho-mqtt.
+    """Publish a message to an MQTT topic.
+
+    Uses the provided MqttClient or falls back to the RuntimeContext.
+    This function exists for backward compatibility; prefer using
+    MqttClient.publish() directly for new code.
 
     Args:
         topic: The MQTT topic to publish to
         payload: The payload as a dict (will be JSON serialized)
-        host: MQTT broker host
-        port: MQTT broker port (as string for backwards compatibility)
+        mqtt_client: Optional MqttClient instance. If not provided,
+                     uses the client from RuntimeContext.
 
     Returns:
         True if successful, False otherwise
     """
-    payload_str = json.dumps(payload)
+    # Import here to avoid circular imports
+    from mqtt2ai.core.context import get_context
 
-    try:
-        client = _get_mqtt_client(host, int(port))
-        if client is None:
+    client = mqtt_client
+    if client is None:
+        ctx = get_context()
+        if ctx is None or ctx.mqtt_client is None:
+            logging.error("Cannot publish MQTT: no client available")
             return False
+        client = ctx.mqtt_client
 
-        result = client.publish(topic, payload_str, qos=1)
-        result.wait_for_publish(timeout=5.0)
-
-        if result.rc == mqtt.MQTT_ERR_SUCCESS:
-            return True
-        print(f"Error publishing MQTT: rc={result.rc}", file=sys.stderr)
-        return False
-
-    except Exception as e:
-        print(f"Error sending MQTT: {e}", file=sys.stderr)
-        return False
+    payload_str = json.dumps(payload)
+    return client.publish(topic, payload_str)
 
 def write_debug_output(debug_dir: str, url: str, body: dict, response: dict = None):
     """Write HTTP call details to a debug file with short hash filename."""

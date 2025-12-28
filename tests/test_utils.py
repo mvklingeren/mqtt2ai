@@ -231,91 +231,73 @@ class TestSaveJsonFile:
 
 
 @pytest.fixture
-def mock_paho_client():
-    """Mock paho.mqtt.client.Client for utils module."""
-    with patch("mqtt2ai.core.utils.mqtt.Client") as mock_client_class:
-        mock_instance = MagicMock()
-        mock_client_class.return_value = mock_instance
-
-        # Mock publish result
-        mock_result = MagicMock()
-        mock_result.rc = 0  # MQTT_ERR_SUCCESS
-        mock_result.wait_for_publish = MagicMock()
-        mock_instance.publish.return_value = mock_result
-
-        yield mock_instance
-
-
-@pytest.fixture(autouse=True)
-def reset_utils_client():
-    """Reset the module-level MQTT client before each test."""
-    utils._MQTT_CLIENT = None
-    yield
-    utils._MQTT_CLIENT = None
+def mock_mqtt_client():
+    """Mock MqttClient for utils module."""
+    mock_client = MagicMock()
+    mock_client.publish.return_value = True
+    return mock_client
 
 
 class TestPublishMqtt:
     """Tests for publish_mqtt function."""
 
-    def test_publish_mqtt_success(self, mock_paho_client):
-        """Test successful MQTT publish."""
-        result = publish_mqtt("test/topic", {"state": "ON"}, host="localhost", port="1883")
+    def test_publish_mqtt_success_with_explicit_client(self, mock_mqtt_client):
+        """Test successful MQTT publish with explicit client."""
+        result = publish_mqtt("test/topic", {"state": "ON"}, mqtt_client=mock_mqtt_client)
 
         assert result is True
-        mock_paho_client.publish.assert_called_once()
+        mock_mqtt_client.publish.assert_called_once()
 
-    def test_publish_mqtt_with_custom_host_port(self, mock_paho_client):
-        """Test MQTT publish with custom host and port."""
-        result = publish_mqtt(
-            "test/topic",
-            {"state": "OFF"},
-            host="10.0.0.1",
-            port="8883"
-        )
+    def test_publish_mqtt_with_context(self, mock_mqtt_client):
+        """Test MQTT publish using RuntimeContext."""
+        from mqtt2ai.core.context import set_context, RuntimeContext
 
-        assert result is True
-        # Verify connection was made to custom host/port
-        mock_paho_client.connect.assert_called_with("10.0.0.1", 8883, keepalive=60)
+        # Set up context with mock client
+        ctx = RuntimeContext(mqtt_client=mock_mqtt_client)
+        set_context(ctx)
 
-    def test_publish_mqtt_serializes_payload(self, mock_paho_client):
+        try:
+            result = publish_mqtt("test/topic", {"state": "OFF"})
+
+            assert result is True
+            mock_mqtt_client.publish.assert_called_once()
+        finally:
+            set_context(None)
+
+    def test_publish_mqtt_serializes_payload(self, mock_mqtt_client):
         """Test that payload is JSON serialized."""
         payload = {"key": "value", "number": 42}
-        publish_mqtt("test/topic", payload, host="localhost", port="1883")
+        publish_mqtt("test/topic", payload, mqtt_client=mock_mqtt_client)
 
-        call_args = mock_paho_client.publish.call_args[0]
+        call_args = mock_mqtt_client.publish.call_args[0]
         sent_payload = call_args[1]
 
         # Verify it's valid JSON
         parsed = json.loads(sent_payload)
         assert parsed == payload
 
-    def test_publish_mqtt_connection_error(self):
-        """Test MQTT publish when connection fails."""
-        with patch("mqtt2ai.core.utils.mqtt.Client") as mock_client_class:
-            mock_client_class.return_value.connect.side_effect = Exception("Connection refused")
-            result = publish_mqtt("test/topic", {"state": "ON"}, host="localhost", port="1883")
+    def test_publish_mqtt_no_client_available(self):
+        """Test MQTT publish when no client is available."""
+        from mqtt2ai.core.context import set_context
+
+        # Ensure no context is set
+        set_context(None)
+
+        result = publish_mqtt("test/topic", {"state": "ON"})
 
         assert result is False
 
-    def test_publish_mqtt_publish_error(self, mock_paho_client):
+    def test_publish_mqtt_publish_error(self, mock_mqtt_client):
         """Test MQTT publish when publish fails."""
-        mock_result = mock_paho_client.publish.return_value
-        mock_result.rc = 1  # Not SUCCESS
+        mock_mqtt_client.publish.return_value = False
 
-        result = publish_mqtt("test/topic", {"state": "ON"}, host="localhost", port="1883")
+        result = publish_mqtt("test/topic", {"state": "ON"}, mqtt_client=mock_mqtt_client)
 
         assert result is False
 
-    def test_publish_mqtt_uses_qos_1(self, mock_paho_client):
-        """Test that publish uses QoS 1."""
-        publish_mqtt("test/topic", {"state": "ON"}, host="localhost", port="1883")
-
-        call_kwargs = mock_paho_client.publish.call_args[1]
-        assert call_kwargs.get("qos") == 1
-
-    def test_publish_mqtt_correct_topic(self, mock_paho_client):
+    def test_publish_mqtt_correct_topic(self, mock_mqtt_client):
         """Test that correct topic is used."""
-        publish_mqtt("zigbee2mqtt/light/set", {"state": "ON"}, host="localhost", port="1883")
+        publish_mqtt("zigbee2mqtt/light/set", {"state": "ON"}, mqtt_client=mock_mqtt_client)
 
-        call_args = mock_paho_client.publish.call_args[0]
+        call_args = mock_mqtt_client.publish.call_args[0]
         assert call_args[0] == "zigbee2mqtt/light/set"

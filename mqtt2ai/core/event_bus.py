@@ -4,10 +4,11 @@ Provides a simple pub/sub system for decoupled event tracking during
 simulation runs. Events are collected and can be queried by the
 scenario validator to check assertions.
 """
+import logging
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, List, Optional
-import time
 
 
 class EventType(Enum):
@@ -52,8 +53,12 @@ class EventBus:
         for callback in self._subscribers.get(event_type, []):
             try:
                 callback(event)
-            except Exception:  # pylint: disable=broad-exception-caught
-                pass  # Don't let subscriber errors affect the main flow
+            except Exception as e:
+                # Log but don't let subscriber errors affect the main flow
+                logging.warning(
+                    "Event subscriber failed for %s: %s",
+                    event_type.value, e
+                )
 
     def subscribe(self, event_type: EventType, callback: Callable[[Event], None]) -> None:
         """Subscribe to events of a specific type.

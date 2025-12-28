@@ -13,10 +13,7 @@ from typing import Any, Optional
 import paho.mqtt.client as mqtt
 
 from mqtt2ai.core.config import Config
-
-
-# Topic for publishing causation announcements
-ANNOUNCE_TOPIC = "mqtt2ai/action/announce"
+from mqtt2ai.core.constants import MqttTopics
 
 
 class MqttClient:
@@ -226,7 +223,7 @@ class MqttClient:
         # Remove None values for cleaner JSON
         announcement = {k: v for k, v in announcement.items() if v is not None}
 
-        self.publish(ANNOUNCE_TOPIC, json.dumps(announcement))
+        self.publish(MqttTopics.ACTION_ANNOUNCE, json.dumps(announcement))
 
     def publish(self, topic: str, payload: str) -> bool:
         """Publish a message to the MQTT broker.

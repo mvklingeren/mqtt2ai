@@ -8,8 +8,10 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from mqtt2ai.mqtt.client import MqttClient
+    from mqtt2ai.ai.agent import AiAgent
     from mqtt2ai.core.config import Config
+    from mqtt2ai.mqtt.client import MqttClient
+    from mqtt2ai.rules.device_tracker import DeviceStateTracker
     from mqtt2ai.telegram.bot import TelegramBot
 
 
@@ -33,8 +35,8 @@ class RuntimeContext:
         disable_new_rules: Whether new rules are created disabled by default
     """
     mqtt_client: Optional['MqttClient'] = None
-    device_tracker: Optional[object] = None  # DeviceStateTracker
-    ai_agent: Optional[object] = None  # AiAgent
+    device_tracker: Optional['DeviceStateTracker'] = None
+    ai_agent: Optional['AiAgent'] = None
     config: Optional['Config'] = None
     telegram_bot: Optional['TelegramBot'] = None
     disable_new_rules: bool = False
@@ -65,8 +67,8 @@ def set_context(ctx: RuntimeContext) -> None:
 
 def create_context(
     mqtt_client: Optional['MqttClient'] = None,
-    device_tracker: Optional[object] = None,
-    ai_agent: Optional[object] = None,
+    device_tracker: Optional['DeviceStateTracker'] = None,
+    ai_agent: Optional['AiAgent'] = None,
     config: Optional['Config'] = None,
     telegram_bot: Optional['TelegramBot'] = None,
     disable_new_rules: bool = False
