@@ -7,12 +7,12 @@ execution of fixed automation rules.
 import json
 import logging
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from event_bus import event_bus, EventType
 from trigger_analyzer import TriggerResult
 
 # Avoid circular imports - use TYPE_CHECKING
-from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from mqtt_client import MqttClient
     from knowledge_base import KnowledgeBase

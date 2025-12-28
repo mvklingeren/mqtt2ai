@@ -7,7 +7,7 @@ import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-
+from datetime import datetime
 from event_bus import event_bus, EventType
 
 
@@ -331,7 +331,6 @@ def write_json_report(results: List[AssertionResult],
         scenario_name: Optional scenario name
         duration_seconds: Total test duration
     """
-    from datetime import datetime
 
     report = {
         "scenario": scenario_name,

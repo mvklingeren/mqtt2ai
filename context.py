@@ -54,7 +54,7 @@ def set_context(ctx: RuntimeContext) -> None:
     Args:
         ctx: The RuntimeContext instance to use globally.
     """
-    global _RUNTIME_CONTEXT
+    global _RUNTIME_CONTEXT  # pylint: disable=global-statement
     _RUNTIME_CONTEXT = ctx
 
 

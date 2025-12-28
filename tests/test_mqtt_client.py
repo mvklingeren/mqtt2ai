@@ -3,6 +3,8 @@ import os
 import queue
 import sys
 from unittest.mock import patch, MagicMock, PropertyMock
+import json
+import logging
 
 import pytest
 
@@ -457,7 +459,6 @@ class TestMqttClientOnMessage:
 
     def test_on_message_without_queue_logs_warning(self, config, mock_paho_client, caplog):
         """Test that _on_message logs warning if no queue configured."""
-        import logging
 
         client = MqttClient(config)
         client._message_queue = None
@@ -509,7 +510,6 @@ class TestMqttClientAnnounce:
 
     def test_announce_includes_source(self, config, mock_paho_client):
         """Test that announce includes source in payload."""
-        import json
 
         client = MqttClient(config)
         client._client = mock_paho_client
@@ -527,7 +527,6 @@ class TestMqttClientAnnounce:
 
     def test_announce_removes_none_values(self, config, mock_paho_client):
         """Test that announce removes None values from payload."""
-        import json
 
         client = MqttClient(config)
         client._client = mock_paho_client

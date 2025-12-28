@@ -72,6 +72,7 @@ class TestSendMqttMessage:
     """Tests for send_mqtt_message function."""
 
     def test_send_mqtt_message_success(self, mock_context):
+        """Test successful MQTT message sending."""
         mock_context.mqtt_client.publish.return_value = True
         result = send_mqtt_message("test/topic", '{"state": "ON"}', context=mock_context)
 

@@ -56,7 +56,7 @@ class MqttCollector:
         device_tracker: DeviceStateTracker,
         rule_engine: RuleEngine,
         knowledge_base: KnowledgeBase,
-        messages_deque: deque,
+        messages_deque: deque[str],
         lock: threading.Lock,
         callbacks: CollectorCallbacks
     ):
@@ -167,6 +167,8 @@ class MqttCollector:
 
         except Exception as e:  # pylint: disable=broad-exception-caught
             logging.error("Collector thread error: %s", e)
+            self._running = False
+            self.callbacks.on_shutdown(f"Collector thread error: {e}")
 
     def _simulation_collector_loop(self):  # pylint: disable=too-many-branches,too-many-statements
         """Background thread that replays simulated MQTT messages from a scenario file."""
