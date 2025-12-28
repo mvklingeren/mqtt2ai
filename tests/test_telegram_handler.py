@@ -4,10 +4,10 @@ import logging
 from unittest.mock import MagicMock, patch
 import pytest
 
-from telegram_handler import TelegramHandler
-from config import Config
-from ai_agent import AiAgent
-from device_state_tracker import DeviceStateTracker
+from mqtt2ai.telegram.handler import TelegramHandler
+from mqtt2ai.core.config import Config
+from mqtt2ai.ai.agent import AiAgent
+from mqtt2ai.rules.device_tracker import DeviceStateTracker
 
 @pytest.fixture
 def mock_config():

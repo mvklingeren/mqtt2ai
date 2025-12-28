@@ -5,10 +5,10 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ai_agent import AiAgent, timestamp
-from config import Config
-from knowledge_base import KnowledgeBase
-from prompt_builder import PromptBuilder
+from mqtt2ai.ai.agent import AiAgent, timestamp
+from mqtt2ai.core.config import Config
+from mqtt2ai.rules.knowledge_base import KnowledgeBase
+from mqtt2ai.ai.prompt_builder import PromptBuilder
 
 
 class TestTimestamp:
@@ -198,7 +198,7 @@ class TestAiAgentExecuteAiCall:
     def test_execute_ai_call_routes_to_gemini(self, config, mock_event_bus):
         """Test that gemini routes to Gemini SDK call."""
         config.ai_provider = "gemini"
-        with patch("ai_providers.gemini_provider.genai.Client"):
+        with patch("mqtt2ai.ai.providers.gemini.genai.Client"):
             agent = AiAgent(config, mock_event_bus)
 
             with patch.object(agent.ai_provider_instance, "execute_call") as mock_call:
@@ -234,11 +234,11 @@ class TestAiAgentTestConnection:
     def test_test_connection_gemini_sdk_not_installed(self, config, mock_event_bus):
         """Test Gemini connection test when SDK not installed."""
         config.ai_provider = "gemini"
-        with patch("ai_providers.gemini_provider.genai.Client"):
+        with patch("mqtt2ai.ai.providers.gemini.genai.Client"):
             agent = AiAgent(config, mock_event_bus)
 
             # Mock GEMINI_AVAILABLE in the ai_providers.gemini_provider module
-            with patch("ai_providers.gemini_provider.GEMINI_AVAILABLE", False):
+            with patch("mqtt2ai.ai.providers.gemini.GEMINI_AVAILABLE", False):
                 success, message = agent.test_connection()
 
                 assert success is False
@@ -263,7 +263,7 @@ class TestAiAgentTestConnection:
         agent = AiAgent(config, mock_event_bus)
 
         # Mock ANTHROPIC_AVAILABLE in the ai_providers.claude_provider module
-        with patch("ai_providers.claude_provider.ANTHROPIC_AVAILABLE", False):
+        with patch("mqtt2ai.ai.providers.claude.ANTHROPIC_AVAILABLE", False):
             success, message = agent.test_connection()
 
             assert success is False
@@ -280,7 +280,7 @@ class TestAiAgentOpenAICompatible:
         config.openai_models = ["llama3.2"]
         agent = AiAgent(config, mock_event_bus)
 
-        with patch("ai_providers.openai_provider.OPENAI_AVAILABLE", True):
+        with patch("mqtt2ai.ai.providers.openai.OPENAI_AVAILABLE", True):
             with patch.object(agent.ai_provider_instance, "test_connection") as mock_test:
                 mock_test.return_value = (
                     True,
@@ -298,7 +298,7 @@ class TestAiAgentOpenAICompatible:
         config.ai_provider = "openai-compatible"
         agent = AiAgent(config, mock_event_bus)
 
-        with patch("ai_providers.openai_provider.OPENAI_AVAILABLE", False):
+        with patch("mqtt2ai.ai.providers.openai.OPENAI_AVAILABLE", False):
             success, message = agent.test_connection()
 
             assert success is False
@@ -309,7 +309,7 @@ class TestAiAgentOpenAICompatible:
         config.ai_provider = "openai-compatible"
         agent = AiAgent(config, mock_event_bus)
 
-        with patch("ai_providers.openai_provider.OPENAI_AVAILABLE", True):
+        with patch("mqtt2ai.ai.providers.openai.OPENAI_AVAILABLE", True):
             with patch.object(agent.ai_provider_instance, "test_connection") as mock_test:
                 mock_test.return_value = (False, "OpenAI API error: Connection refused")
                 success, message = agent.test_connection()
@@ -324,7 +324,7 @@ class TestAiAgentRunAnalysis:
     def test_run_analysis_builds_prompt_and_executes(self, config, mock_event_bus):
         """Test that run_analysis builds prompt and executes."""
         config.ai_provider = "gemini"  # Use SDK-based provider that uses full prompt
-        with patch("ai_providers.gemini_provider.genai.Client"):
+        with patch("mqtt2ai.ai.providers.gemini.genai.Client"):
             agent = AiAgent(config, mock_event_bus)
             kb = KnowledgeBase(config)
 
@@ -362,4 +362,3 @@ class TestAiAgentRunAnalysis:
                 agent.run_analysis("messages", kb, "reason")
 
                 mock_compact.assert_called_once()
-

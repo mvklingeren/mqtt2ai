@@ -10,8 +10,8 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from daemon import MqttAiDaemon, setup_logging, timestamp
-from config import Config
+from mqtt2ai.core.daemon import MqttAiDaemon, setup_logging, timestamp
+from mqtt2ai.core.config import Config
 
 
 class TestTimestamp:
@@ -178,7 +178,6 @@ class TestMqttAiDaemonAiOrchestrator:
         # Request should be queued
         assert result is True
         assert daemon.ai_orchestrator.queue_size() == 1
-
 
 
 
@@ -416,4 +415,3 @@ class TestMqttAiDaemonConfiguration:
         reason = daemon._determine_trigger_reason(False, True)
 
         assert "1000" in reason
-

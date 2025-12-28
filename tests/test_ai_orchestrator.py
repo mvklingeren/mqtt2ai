@@ -4,7 +4,7 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
-from ai_orchestrator import AiOrchestrator, AiRequest
+from mqtt2ai.ai.orchestrator import AiOrchestrator, AiRequest
 
 
 class TestAiRequest:
@@ -431,4 +431,3 @@ class TestAiOrchestratorWaitForCompletion:
         elapsed = time.time() - start
 
         assert elapsed < 0.1
-

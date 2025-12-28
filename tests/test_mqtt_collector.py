@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mqtt_collector import MqttCollector, CollectorCallbacks, timestamp
+from mqtt2ai.mqtt.collector import MqttCollector, CollectorCallbacks, timestamp
 
 
 class TestTimestamp:
@@ -522,4 +522,3 @@ def collector_dependencies():
             wait_for_ai=MagicMock()
         )
     }
-

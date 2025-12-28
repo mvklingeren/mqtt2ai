@@ -5,8 +5,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from knowledge_base import KnowledgeBase
-from config import Config
+from mqtt2ai.rules.knowledge_base import KnowledgeBase
+from mqtt2ai.core.config import Config
 
 
 class TestKnowledgeBaseInit:
@@ -309,5 +309,3 @@ class TestKnowledgeBaseMtimeOptimization:
 
         # Should return False since nothing changed
         assert kb._needs_reload() is False
-
-

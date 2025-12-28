@@ -1,13 +1,10 @@
 """Tests for the TriggerAnalyzer module."""
 import json
 import os
-import sys
 import time
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from trigger_analyzer import TriggerAnalyzer, TriggerResult, TopicState, NumericFieldState
+from mqtt2ai.rules.trigger_analyzer import TriggerAnalyzer, TriggerResult, TopicState, NumericFieldState
 
 
 class TestTriggerResult:
@@ -437,5 +434,3 @@ class TestTriggerAnalyzerStateUpdate:
         # This is verified by checking the topic_state
         topic_state = analyzer.topic_states["zigbee2mqtt/sensor"]
         assert topic_state.state_fields["contact"] is True
-
-
